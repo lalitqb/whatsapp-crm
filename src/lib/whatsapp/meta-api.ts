@@ -227,6 +227,48 @@ export async function sendReactionMessage(
 }
 
 // ============================================================
+// Message templates
+// ============================================================
+
+export interface CreateMessageTemplateArgs {
+  wabaId: string
+  accessToken: string
+  name: string
+  language: string
+  category: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION'
+  components: Array<Record<string, unknown>>
+}
+
+export interface MetaCreatedTemplate {
+  id: string
+  status: string
+  category: string
+}
+
+/**
+ * Submit a new message template to Meta for review.
+ * @see https://developers.facebook.com/docs/graph-api/reference/whats-app-business-account/message_templates/
+ */
+export async function createMessageTemplate(
+  args: CreateMessageTemplateArgs,
+): Promise<MetaCreatedTemplate> {
+  const { wabaId, accessToken, name, language, category, components } = args
+  const url = `${META_API_BASE}/${wabaId}/message_templates`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ name, language, category, components }),
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  return response.json()
+}
+
+// ============================================================
 // Media
 // ============================================================
 

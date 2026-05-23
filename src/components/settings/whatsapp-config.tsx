@@ -13,6 +13,7 @@ import {
   Zap,
   AlertTriangle,
   RotateCcw,
+  Sparkles,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
@@ -42,6 +43,7 @@ export function WhatsAppConfig() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [generatingVerifyToken, setGeneratingVerifyToken] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [config, setConfig] = useState<WhatsAppConfigType | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('unknown');
@@ -150,17 +152,16 @@ export function WhatsAppConfig() {
       const payload: Record<string, unknown> = {
         phone_number_id: phoneNumberId.trim(),
         waba_id: wabaId.trim() || null,
-        verify_token: verifyToken.trim() || null,
       };
+
+      if (verifyToken.trim()) {
+        payload.verify_token = verifyToken.trim();
+      }
 
       if (tokenEdited && accessToken !== MASKED_TOKEN && accessToken.trim()) {
         payload.access_token = accessToken.trim();
-      } else if (config) {
-        // Existing config — reuse stored encrypted token by decrypting on the
-        // server. But our POST handler requires an access_token to verify
-        // with Meta. If the user didn't change the token, we need to signal
-        // that. Simplest: require token re-entry if they're updating.
-        toast.error('Please re-enter the Access Token to save changes');
+      } else if (!config) {
+        toast.error('Access Token is required for initial setup');
         setSaving(false);
         return;
       }
@@ -260,6 +261,46 @@ export function WhatsAppConfig() {
   function handleCopyWebhookUrl() {
     navigator.clipboard.writeText(webhookUrl);
     toast.success('Webhook URL copied to clipboard');
+  }
+
+  function handleCopyVerifyToken() {
+    if (!verifyToken.trim()) {
+      toast.error('No verify token to copy');
+      return;
+    }
+    navigator.clipboard.writeText(verifyToken.trim());
+    toast.success('Verify token copied to clipboard');
+  }
+
+  async function handleGenerateVerifyToken() {
+    if (!config) {
+      toast.error('Save your API credentials first, then generate a verify token.');
+      return;
+    }
+
+    try {
+      setGeneratingVerifyToken(true);
+      const res = await fetch('/api/whatsapp/config/verify-token', {
+        method: 'POST',
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to generate verify token');
+        return;
+      }
+
+      setVerifyToken(data.verify_token);
+      await navigator.clipboard.writeText(data.verify_token);
+      toast.success(
+        'Verify token generated, saved, and copied. Paste the same value in Meta webhook settings.',
+      );
+    } catch (err) {
+      console.error('Generate verify token error:', err);
+      toast.error('Failed to generate verify token');
+    } finally {
+      setGeneratingVerifyToken(false);
+    }
   }
 
   if (loading) {
@@ -389,21 +430,56 @@ export function WhatsAppConfig() {
               </div>
               {config && !tokenEdited && (
                 <p className="text-xs text-slate-500">
-                  Token is hidden for security. Re-enter it to update configuration.
+                  Token is hidden for security. Re-enter it only when rotating the access token.
                 </p>
               )}
             </div>
 
             <div className="space-y-2">
               <Label className="text-slate-300">Webhook Verify Token</Label>
-              <Input
-                placeholder="Create a custom verify token"
-                value={verifyToken}
-                onChange={(e) => setVerifyToken(e.target.value)}
-                className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500"
-              />
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Create or generate a verify token"
+                  value={verifyToken}
+                  onChange={(e) => setVerifyToken(e.target.value)}
+                  className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 font-mono text-sm"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={handleCopyVerifyToken}
+                  disabled={!verifyToken.trim()}
+                  title="Copy verify token"
+                  className="shrink-0 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800"
+                >
+                  <Copy className="size-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleGenerateVerifyToken}
+                  disabled={generatingVerifyToken || !config}
+                  title={
+                    config
+                      ? 'Generate a random token and save it'
+                      : 'Save API credentials first'
+                  }
+                  className="shrink-0 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800"
+                >
+                  {generatingVerifyToken ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="size-4" />
+                  )}
+                </Button>
+              </div>
               <p className="text-xs text-slate-500">
-                A custom string you create. Must match the token you set in Meta webhook settings.
+                Must match the token in Meta webhook settings. Use{' '}
+                <span className="text-slate-400">Generate</span> to create a
+                secure token and save it automatically (requires saved API
+                credentials). You can also type your own and click Save
+                Configuration.
               </p>
             </div>
           </CardContent>

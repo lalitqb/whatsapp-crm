@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
+  preparePhoneForMeta,
   sanitizePhoneForMeta,
   isValidE164,
   phoneVariants,
@@ -130,21 +131,28 @@ export async function POST(request: Request) {
     let failedCount = 0
 
     for (const recipient of recipients) {
-      const sanitized = sanitizePhoneForMeta(recipient.phone)
+      const prepared = preparePhoneForMeta(recipient.phone)
 
-      if (!isValidE164(sanitized)) {
+      if (!isValidE164(prepared)) {
         results.push({
           phone: recipient.phone,
           status: 'failed',
-          error: 'Invalid phone number format',
+          error:
+            'Invalid phone number. Use international format (e.g. +91 7903949014 or 917903949014)',
         })
         failedCount++
         continue
       }
 
+      if (prepared !== sanitizePhoneForMeta(recipient.phone)) {
+        console.info(
+          `[broadcast] normalized ${recipient.phone} → ${prepared} for Meta`,
+        )
+      }
+
       // Retry with phone variants on "not in allowed list" so numbers
       // that differ only in a trunk-prefix 0 still reach recipients.
-      const variants = phoneVariants(sanitized)
+      const variants = phoneVariants(prepared)
       let sentMessageId: string | null = null
       let lastError: string | null = null
 

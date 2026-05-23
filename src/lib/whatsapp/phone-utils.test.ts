@@ -5,6 +5,7 @@ import {
   normalizePhone,
   phoneVariants,
   phonesMatch,
+  preparePhoneForMeta,
   sanitizePhoneForMeta,
 } from "./phone-utils";
 
@@ -24,6 +25,19 @@ describe("sanitizePhoneForMeta", () => {
   it("is idempotent on already-sanitized input", () => {
     const cleaned = "14155551212";
     expect(sanitizePhoneForMeta(cleaned)).toBe(cleaned);
+  });
+});
+
+describe("preparePhoneForMeta", () => {
+  it("prefixes 91 for 10-digit Indian mobile numbers", () => {
+    expect(preparePhoneForMeta("7903949014")).toBe("917903949014");
+    expect(preparePhoneForMeta("+91 79039 49014")).toBe("917903949014");
+    expect(preparePhoneForMeta("07903949014")).toBe("917903949014");
+  });
+
+  it("leaves already-international numbers unchanged", () => {
+    expect(preparePhoneForMeta("917903949014")).toBe("917903949014");
+    expect(preparePhoneForMeta("+37063949836")).toBe("37063949836");
   });
 });
 

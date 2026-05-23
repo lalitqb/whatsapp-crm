@@ -125,6 +125,8 @@ export const RATE_LIMITS = {
    *  fidget with reactions and a single "swap" is actually two calls
    *  (remove + add) under the hood. */
   react: { limit: 120, windowMs: 60_000 },
+  /** External notification API (order_pickup, order_delivered, etc.). */
+  notification: { limit: 120, windowMs: 60_000 },
 } as const;
 
 /** Test-only helper. Clears the in-memory state so unit tests don't

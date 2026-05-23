@@ -4,7 +4,15 @@ import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { normalizePhone, phonesMatch } from '@/lib/whatsapp/phone-utils'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
+import {
+  isWebhookVerbose,
+  logWebhook,
+  logWebhookError,
+  logWebhookRawJson,
+} from '@/lib/whatsapp/webhook-logger'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
+import { isValidStatusTransition } from '@/lib/whatsapp/status-transitions'
+import { applyMetaStatusToNotificationLog } from '@/lib/notifications/notification-log'
 
 // Lazy-initialized to avoid build-time crash when env vars are missing
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -55,6 +63,12 @@ interface WhatsAppWebhookEntry {
         status: string
         timestamp: string
         recipient_id: string
+        errors?: Array<{
+          code?: number
+          title?: string
+          message?: string
+          error_data?: { details?: string }
+        }>
       }>
     }
     field: string
@@ -69,7 +83,19 @@ export async function GET(request: Request) {
     const challenge = searchParams.get('hub.challenge')
     const verifyToken = searchParams.get('hub.verify_token')
 
+    logWebhook('GET verify request', {
+      mode,
+      challengeLength: challenge?.length ?? 0,
+      verifyTokenLength: verifyToken?.length ?? 0,
+      queryKeys: [...searchParams.keys()],
+    })
+
     if (mode !== 'subscribe' || !challenge || !verifyToken) {
+      logWebhook('GET verify rejected — missing parameters', {
+        mode,
+        hasChallenge: Boolean(challenge),
+        hasVerifyToken: Boolean(verifyToken),
+      })
       return NextResponse.json(
         { error: 'Missing verification parameters' },
         { status: 400 }
@@ -107,6 +133,10 @@ export async function GET(request: Request) {
     }
 
     if (matchedConfig) {
+      logWebhook('GET verify success — returning challenge', {
+        configId: matchedConfig.id,
+        challengeLength: challenge.length,
+      })
       // Fire-and-forget GCM upgrade. Safe to run on every subscribe
       // since it's a no-op once the column is already GCM.
       if (isLegacyFormat(matchedConfig.verify_token)) {
@@ -130,12 +160,15 @@ export async function GET(request: Request) {
       })
     }
 
+    logWebhook('GET verify failed — token mismatch', {
+      configsChecked: configs?.length ?? 0,
+    })
     return NextResponse.json(
       { error: 'Verification token mismatch' },
       { status: 403 }
     )
   } catch (error) {
-    console.error('Error in webhook GET verification:', error)
+    logWebhookError('GET verify error', error)
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
@@ -149,40 +182,87 @@ export async function POST(request: Request) {
   // signed. request.json() would re-encode and break the signature.
   const rawBody = await request.text()
   const signature = request.headers.get('x-hub-signature-256')
+  const signatureOk = verifyMetaWebhookSignature(rawBody, signature)
 
-  if (!verifyMetaWebhookSignature(rawBody, signature)) {
+  logWebhook('POST received', {
+    bodyBytes: rawBody.length,
+    hasSignatureHeader: Boolean(signature),
+    signaturePrefix: signature?.slice(0, 14) ?? null,
+    signatureValid: signatureOk,
+    metaAppSecretConfigured: Boolean(process.env.META_APP_SECRET),
+    verboseLogging: isWebhookVerbose(),
+  })
+
+  if (!signatureOk) {
     // 401 (not 200) — we want Meta's delivery dashboard to show failures
     // loudly if a misconfiguration causes signatures to stop matching,
     // rather than silently eating events.
-    console.warn('[webhook] rejected request with invalid signature')
+    if (isWebhookVerbose()) {
+      logWebhookRawJson(
+        'POST rejected — invalid signature (body preview)',
+        rawBody.length > 4000 ? `${rawBody.slice(0, 4000)}…` : rawBody,
+      )
+    } else {
+      console.warn('[webhook] rejected request with invalid signature')
+    }
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
+  }
+
+  if (isWebhookVerbose()) {
+    logWebhookRawJson('POST body (full payload)', rawBody)
   }
 
   let body: { entry?: WhatsAppWebhookEntry[] }
   try {
     body = JSON.parse(rawBody)
-  } catch {
+  } catch (parseErr) {
+    logWebhookError('POST invalid JSON', parseErr)
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
   // Process asynchronously so we can ack Meta within their timeout.
   processWebhook(body).catch((error) => {
-    console.error('Error processing webhook:', error)
+    logWebhookError('POST processing error', error)
   })
 
+  logWebhook('POST ack sent to Meta (200 received)')
   return NextResponse.json({ status: 'received' }, { status: 200 })
 }
 
 async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
-  if (!body.entry) return
+  if (!body.entry) {
+    logWebhook('processWebhook — no entry array in payload')
+    return
+  }
+
+  logWebhook('processWebhook start', {
+    entryCount: body.entry.length,
+  })
 
   for (const entry of body.entry) {
     for (const change of entry.changes) {
       const value = change.value
 
+      logWebhook('change event', {
+        wabaEntryId: entry.id,
+        field: change.field,
+        phoneNumberId: value.metadata?.phone_number_id,
+        displayPhone: value.metadata?.display_phone_number,
+        messageCount: value.messages?.length ?? 0,
+        statusCount: value.statuses?.length ?? 0,
+        contactCount: value.contacts?.length ?? 0,
+      })
+
       // Handle status updates
       if (value.statuses) {
         for (const status of value.statuses) {
+          logWebhook('status update', {
+            messageId: status.id,
+            status: status.status,
+            recipientId: status.recipient_id,
+            timestamp: status.timestamp,
+            errors: status.errors,
+          })
           await handleStatusUpdate(status)
         }
       }
@@ -200,7 +280,7 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
         .single()
 
       if (configError || !config) {
-        console.error('No config found for phone_number_id:', phoneNumberId)
+        logWebhookError('no whatsapp_config for phone_number_id', phoneNumberId)
         continue
       }
 
@@ -209,6 +289,18 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       for (let i = 0; i < value.messages.length; i++) {
         const message = value.messages[i]
         const contact = value.contacts[i] || value.contacts[0]
+
+        logWebhook('inbound message', {
+          metaMessageId: message.id,
+          from: message.from,
+          type: message.type,
+          timestamp: message.timestamp,
+          contactName: contact?.profile?.name,
+          waId: contact?.wa_id,
+          textPreview:
+            message.type === 'text' ? message.text?.body?.slice(0, 120) : undefined,
+          userId: config.user_id,
+        })
 
         await processMessage(
           message,
@@ -219,6 +311,8 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       }
     }
   }
+
+  logWebhook('processWebhook complete')
 }
 
 // The happy-path status ladder — pending → sent → delivered → read →
@@ -230,44 +324,18 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
 // delivered or the user has read or replied, a later "failed" status
 // event is a bug in Meta's pipeline or a spoof attempt and must be
 // ignored.
-const RECIPIENT_STATUS_LADDER = [
-  'pending',
-  'sent',
-  'delivered',
-  'read',
-  'replied',
-] as const
-
-function ladderLevel(s: string): number {
-  const idx = (RECIPIENT_STATUS_LADDER as readonly string[]).indexOf(s)
-  return idx < 0 ? -1 : idx
-}
-
-/**
- * Can a recipient transition from `current` to `incoming`?
- *   - Along the ladder, only forward moves are allowed.
- *   - `failed` is accepted only from `pending` or `sent`; it's refused
- *     once the recipient has reached any of the success states.
- */
-function isValidStatusTransition(current: string, incoming: string): boolean {
-  if (incoming === 'failed') {
-    return current === 'pending' || current === 'sent'
-  }
-  if (current === 'failed') {
-    return false // failed is terminal
-  }
-  const ci = ladderLevel(current)
-  const ii = ladderLevel(incoming)
-  if (ii < 0) return false // unknown incoming status
-  if (ci < 0) return true // unknown current — accept anything on the ladder
-  return ii > ci
-}
 
 async function handleStatusUpdate(status: {
   id: string
   status: string
   timestamp: string
   recipient_id: string
+  errors?: Array<{
+    code?: number
+    title?: string
+    message?: string
+    error_data?: { details?: string }
+  }>
 }) {
   // 1) Mirror onto messages (legacy behavior) — Meta's status values
   //    already match the CHECK constraint on messages.status.
@@ -315,6 +383,9 @@ async function handleStatusUpdate(status: {
   if (recUpdateErr) {
     console.error('Error updating broadcast recipient status:', recUpdateErr)
   }
+
+  // 3) Notifications API audit log (migration 011)
+  await applyMetaStatusToNotificationLog(status)
 }
 
 /**

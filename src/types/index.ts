@@ -128,6 +128,8 @@ export interface MessageTemplate {
   footer_text?: string;
   buttons?: Record<string, unknown>[];
   status?: 'Draft' | 'Pending' | 'Approved' | 'Rejected';
+  /** Maps API names to Meta slots, e.g. { customer_name: 1, order_id: 2 } */
+  variable_mapping?: Record<string, number | string> | null;
   created_at: string;
 }
 

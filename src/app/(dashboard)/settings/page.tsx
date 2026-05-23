@@ -1,7 +1,8 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Settings, MessageSquare, Tag, User } from 'lucide-react';
+import { Settings, MessageSquare, Tag, User, Plug } from 'lucide-react';
+import { IntegrationsApiPanel } from '@/components/settings/integrations-api-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { WhatsAppConfig } from '@/components/settings/whatsapp-config';
 import { TemplateManager } from '@/components/settings/template-manager';
@@ -10,7 +11,7 @@ import { ProfileForm } from '@/components/settings/profile-form';
 import { PasswordForm } from '@/components/settings/password-form';
 import { SessionsCard } from '@/components/settings/sessions-card';
 
-const TAB_VALUES = ['profile', 'whatsapp', 'templates', 'tags'] as const;
+const TAB_VALUES = ['profile', 'whatsapp', 'templates', 'integrations', 'tags'] as const;
 type TabValue = (typeof TAB_VALUES)[number];
 
 function isTabValue(v: string | null): v is TabValue {
@@ -39,8 +40,8 @@ export default function SettingsPage() {
       <div>
         <h1 className="text-2xl font-bold text-white">Settings</h1>
         <p className="text-sm text-slate-400 mt-1">
-          Manage your profile, WhatsApp® integration, message templates, and
-          tags.
+          Manage your profile, WhatsApp® integration, templates, notifications
+          API, and tags.
         </p>
       </div>
 
@@ -68,6 +69,13 @@ export default function SettingsPage() {
             Templates
           </TabsTrigger>
           <TabsTrigger
+            value="integrations"
+            className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
+          >
+            <Plug className="size-4" />
+            Notifications API
+          </TabsTrigger>
+          <TabsTrigger
             value="tags"
             className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
           >
@@ -88,6 +96,10 @@ export default function SettingsPage() {
 
         <TabsContent value="templates">
           <TemplateManager />
+        </TabsContent>
+
+        <TabsContent value="integrations">
+          <IntegrationsApiPanel />
         </TabsContent>
 
         <TabsContent value="tags">

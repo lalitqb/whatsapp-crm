@@ -1,7 +1,7 @@
 import { sendTextMessage, sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
-  sanitizePhoneForMeta,
+  preparePhoneForMeta,
   isValidE164,
   phoneVariants,
   isRecipientNotAllowedError,
@@ -70,7 +70,7 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
     throw new Error('contact not found for this user')
   }
 
-  const sanitized = sanitizePhoneForMeta(contact.phone)
+  const sanitized = preparePhoneForMeta(contact.phone)
   if (!isValidE164(sanitized)) {
     throw new Error(`contact phone invalid: ${contact.phone}`)
   }

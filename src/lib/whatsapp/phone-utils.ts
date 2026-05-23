@@ -8,6 +8,45 @@ export function sanitizePhoneForMeta(phone: string): string {
   return phone.replace(/\D/g, '')
 }
 
+/** Optional `DEFAULT_PHONE_COUNTRY_CODE` from env (e.g. `91` for India). */
+export function getDefaultPhoneCountryCode(): string | undefined {
+  const raw = process.env.DEFAULT_PHONE_COUNTRY_CODE?.trim()
+  if (!raw) return undefined
+  const digits = raw.replace(/\D/g, '')
+  return digits || undefined
+}
+
+/**
+ * Sanitize and apply default country code when numbers are stored locally
+ * without it (common in India: `7903949014` → `917903949014`).
+ */
+export function preparePhoneForMeta(
+  phone: string,
+  defaultCountryCode?: string,
+): string {
+  const digits = sanitizePhoneForMeta(phone)
+  if (!digits) return ''
+
+  // India — always normalize local 10-digit mobiles to 91XXXXXXXXXX
+  if (/^91[6-9]\d{9}$/.test(digits)) return digits
+  if (/^[6-9]\d{9}$/.test(digits)) return `91${digits}`
+  if (/^0[6-9]\d{9}$/.test(digits)) return `91${digits.slice(1)}`
+
+  const cc =
+    defaultCountryCode?.replace(/\D/g, '') ?? getDefaultPhoneCountryCode()
+  if (!cc || digits.startsWith(cc)) return digits
+
+  if (cc === '1' && digits.length === 10 && /^[2-9]\d{9}$/.test(digits)) {
+    return `1${digits}`
+  }
+
+  if (digits.length === 10 && /^[2-9]\d{9}$/.test(digits)) {
+    return `${cc}${digits}`
+  }
+
+  return digits
+}
+
 /**
  * Normalize phone number by removing all non-digit characters.
  * Used for comparing phone numbers in different formats.

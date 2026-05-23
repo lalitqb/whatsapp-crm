@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { sendTextMessage, sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import {
-  sanitizePhoneForMeta,
+  preparePhoneForMeta,
   isValidE164,
   phoneVariants,
   isRecipientNotAllowedError,
@@ -93,11 +93,14 @@ export async function POST(request: Request) {
     }
 
     // Sanitize and validate phone
-    const sanitizedPhone = sanitizePhoneForMeta(contact.phone)
+    const sanitizedPhone = preparePhoneForMeta(contact.phone)
     if (!isValidE164(sanitizedPhone)) {
       return NextResponse.json(
-        { error: 'Invalid phone number format' },
-        { status: 400 }
+        {
+          error:
+            'Invalid phone number. Use international format (e.g. +91 7903949014)',
+        },
+        { status: 400 },
       )
     }
 

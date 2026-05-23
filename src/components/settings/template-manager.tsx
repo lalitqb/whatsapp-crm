@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Plus, Trash2, Loader2, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, Loader2, RefreshCw, CloudUpload } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
@@ -50,6 +50,7 @@ interface TemplateFormData {
   language: string;
   body_text: string;
   header_type: string;
+  header_content: string;
   footer_text: string;
 }
 
@@ -64,6 +65,7 @@ const emptyForm: TemplateFormData = {
   language: 'en_US',
   body_text: '',
   header_type: '',
+  header_content: '',
   footer_text: '',
 };
 
@@ -99,6 +101,7 @@ export function TemplateManager() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [submittingId, setSubmittingId] = useState<string | null>(null);
   const [form, setForm] = useState<TemplateFormData>(emptyForm);
 
   useEffect(() => {
@@ -148,30 +151,37 @@ export function TemplateManager() {
         return;
       }
 
-      const payload = {
-        user_id: user.id,
-        name: form.name.trim(),
-        category: form.category,
-        language: form.language.trim() || 'en_US',
-        body_text: form.body_text.trim(),
-        header_type: form.header_type || null,
-        footer_text: form.footer_text.trim() || null,
-        status: 'Draft' as const,
-      };
+      const res = await fetch('/api/whatsapp/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: form.name.trim(),
+          category: form.category,
+          language: form.language.trim() || 'en_US',
+          body_text: form.body_text.trim(),
+          header_type:
+            form.header_type && form.header_type !== 'none'
+              ? form.header_type
+              : null,
+          header_content: form.header_content.trim() || null,
+          footer_text: form.footer_text.trim() || null,
+        }),
+      });
 
-      const { error } = await supabase
-        .from('message_templates')
-        .insert(payload);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || `Create failed (HTTP ${res.status})`);
+      }
 
-      if (error) throw error;
-
-      toast.success('Template created successfully');
+      toast.success(data.message || 'Template submitted to Meta');
       setDialogOpen(false);
       setForm(emptyForm);
       if (user) await fetchTemplates(user.id);
     } catch (err) {
       console.error('Save error:', err);
-      toast.error('Failed to create template');
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to create template',
+      );
     } finally {
       setSaving(false);
     }
@@ -183,6 +193,44 @@ export function TemplateManager() {
    * something Meta will actually accept on send — stops users getting
    * stuck on error #132001 "Template name does not exist".
    */
+  async function submitTemplateToMeta(template: MessageTemplate) {
+    const res = await fetch('/api/whatsapp/templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: template.name,
+        category: template.category,
+        language: template.language?.trim() || 'en_US',
+        body_text: template.body_text,
+        header_type: template.header_type || null,
+        header_content: template.header_content || null,
+        footer_text: template.footer_text || null,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data?.error || `Submit failed (HTTP ${res.status})`);
+    }
+    return data as { message?: string; status?: string };
+  }
+
+  async function handleSubmitToMeta(template: MessageTemplate) {
+    if (!user) return;
+    setSubmittingId(template.id);
+    try {
+      const data = await submitTemplateToMeta(template);
+      toast.success(data.message || 'Template submitted to Meta');
+      await fetchTemplates(user.id);
+    } catch (err) {
+      console.error('Submit to Meta error:', err);
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to submit template to Meta',
+      );
+    } finally {
+      setSubmittingId(null);
+    }
+  }
+
   async function handleSyncFromMeta() {
     if (!user) return;
     setSyncing(true);
@@ -257,9 +305,9 @@ export function TemplateManager() {
         <div>
           <h2 className="text-lg font-semibold text-white">Message Templates</h2>
           <p className="text-sm text-slate-400">
-            Create and manage your WhatsApp message templates. Meta requires
-            every template to be approved in the WhatsApp Manager before it can
-            be sent — use &quot;Sync from Meta&quot; to pull your approved list.
+            Create templates here to submit them to Meta, then use &quot;Sync from
+            Meta&quot; to refresh approval status. Only Approved templates can be
+            sent in broadcasts and inbox.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -321,15 +369,39 @@ export function TemplateManager() {
                   {template.footer_text && (
                     <p className="text-xs text-slate-500 italic">{template.footer_text}</p>
                   )}
+                  {template.status === 'Draft' && (
+                    <p className="text-xs text-amber-500/90">
+                      Local draft only — not on Meta yet. Submit to Meta or delete and use
+                      &quot;Create on Meta&quot;.
+                    </p>
+                  )}
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleDelete(template.id)}
-                  className="text-slate-400 hover:text-red-400 hover:bg-red-950/30 shrink-0 ml-2"
-                >
-                  <Trash2 className="size-4" />
-                </Button>
+                <div className="flex shrink-0 items-center gap-1 ml-2">
+                  {template.status === 'Draft' && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="Submit this template to Meta"
+                      onClick={() => handleSubmitToMeta(template)}
+                      disabled={submittingId === template.id}
+                      className="text-slate-400 hover:text-violet-400 hover:bg-violet-950/30"
+                    >
+                      {submittingId === template.id ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <CloudUpload className="size-4" />
+                      )}
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleDelete(template.id)}
+                    className="text-slate-400 hover:text-red-400 hover:bg-red-950/30"
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           ))}
@@ -342,7 +414,8 @@ export function TemplateManager() {
           <DialogHeader>
             <DialogTitle className="text-white">New Message Template</DialogTitle>
             <DialogDescription className="text-slate-400">
-              Create a new WhatsApp message template.
+              Submits the template to your WhatsApp Business Account on Meta for
+              review. Status is usually Pending until approved.
             </DialogDescription>
           </DialogHeader>
 
@@ -355,6 +428,11 @@ export function TemplateManager() {
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500"
               />
+              <p className="text-[11px] text-slate-500">
+                Saved as lowercase with underscores on Meta (e.g.{' '}
+                <code className="text-slate-400">Welcome Message</code> →{' '}
+                <code className="text-slate-400">welcome_message</code>).
+              </p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -423,6 +501,20 @@ export function TemplateManager() {
               </Select>
             </div>
 
+            {form.header_type === 'text' && (
+              <div className="space-y-2">
+                <Label className="text-slate-300">Header Text</Label>
+                <Input
+                  placeholder="Optional header line"
+                  value={form.header_content}
+                  onChange={(e) =>
+                    setForm({ ...form, header_content: e.target.value })
+                  }
+                  className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500"
+                />
+              </div>
+            )}
+
             <div className="space-y-2">
               <Label className="text-slate-300">Body Text</Label>
               <Textarea
@@ -464,7 +556,7 @@ export function TemplateManager() {
                   Creating...
                 </>
               ) : (
-                'Create Template'
+                'Create on Meta'
               )}
             </Button>
           </DialogFooter>
