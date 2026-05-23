@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Settings, MessageSquare, Tag, User, Plug } from 'lucide-react';
 import { IntegrationsApiPanel } from '@/components/settings/integrations-api-panel';
@@ -22,14 +23,20 @@ export default function SettingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // The URL is the single source of truth for the active tab — no
-  // local state, no sync effect. A previous revision duplicated this
-  // into `useState` + a sync effect, which tripped React 19's
-  // set-state-in-effect rule and was also redundant.
+  // URL drives deep links / back button; optimistic state makes tab clicks
+  // instant. URL-only control broke switching because router.replace is
+  // async and Base UI Tabs stayed on the old `value` until navigation finished.
   const queryTab = searchParams.get('tab');
-  const tab: TabValue = isTabValue(queryTab) ? queryTab : 'profile';
+  const urlTab: TabValue = isTabValue(queryTab) ? queryTab : 'profile';
+  const [pendingTab, setPendingTab] = useState<TabValue | null>(null);
+  const tab = pendingTab ?? urlTab;
+
+  useEffect(() => {
+    setPendingTab(null);
+  }, [urlTab]);
 
   const onChange = (next: TabValue) => {
+    setPendingTab(next);
     const params = new URLSearchParams(searchParams.toString());
     params.set('tab', next);
     router.replace(`/settings?${params.toString()}`, { scroll: false });
