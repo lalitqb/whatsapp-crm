@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import type { MessageTemplate } from '@/types';
+import { TemplateHeaderMedia } from '@/components/settings/template-header-media';
 
 const CATEGORIES = ['Marketing', 'Utility', 'Authentication'] as const;
 const HEADER_TYPES = ['text', 'image', 'video', 'document'] as const;
@@ -306,8 +307,9 @@ export function TemplateManager() {
           <h2 className="text-lg font-semibold text-white">Message Templates</h2>
           <p className="text-sm text-slate-400">
             Create templates here to submit them to Meta, then use &quot;Sync from
-            Meta&quot; to refresh approval status. Only Approved templates can be
-            sent in broadcasts and inbox.
+            Meta&quot; to refresh approval status. For templates with an image
+            header, upload default media below — the Notifications API uses it
+            automatically (no URL in each webhook call).
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -375,6 +377,10 @@ export function TemplateManager() {
                       &quot;Create on Meta&quot;.
                     </p>
                   )}
+                  <TemplateHeaderMedia
+                    template={template}
+                    onUpdated={() => user && fetchTemplates(user.id)}
+                  />
                 </div>
                 <div className="flex shrink-0 items-center gap-1 ml-2">
                   {template.status === 'Draft' && (

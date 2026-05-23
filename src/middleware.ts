@@ -37,7 +37,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // Protected pages - redirect to login if not authenticated
-  const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/automations', '/settings']
+  const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/automations', '/ai-agents', '/settings']
   if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
@@ -55,6 +55,10 @@ export async function middleware(request: NextRequest) {
 
   if (!user && request.nextUrl.pathname.startsWith('/api/v1/')) {
     return supabaseResponse
+  }
+
+  if (!user && request.nextUrl.pathname.startsWith('/api/ai/')) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
   return supabaseResponse

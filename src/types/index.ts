@@ -124,6 +124,10 @@ export interface MessageTemplate {
   language?: string;
   header_type?: 'text' | 'image' | 'video' | 'document';
   header_content?: string;
+  /** Public URL in Supabase Storage — default header for API sends */
+  header_media_url?: string | null;
+  header_media_storage_path?: string | null;
+  header_media_filename?: string | null;
   body_text: string;
   footer_text?: string;
   buttons?: Record<string, unknown>[];

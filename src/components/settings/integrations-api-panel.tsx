@@ -34,12 +34,21 @@ interface IntegrationConfig {
 
 const EXAMPLE_PAYLOAD = {
   customerPhone: '917903949014',
-  template: 'laundry_order_ready',
+  template: 'pickup_confirmation',
+  language: 'en_US',
   variables: {
     customer_name: 'Lalit',
-    order_id: 'LD1234',
+    order_id: 'EW-0080',
+    pickup_address: 'Jamshedpur',
+    pickup_time_slot: '09:45',
+    button_url_suffix: 'EW-0080',
   },
-  variableOrder: ['customer_name', 'order_id'],
+  variableOrder: [
+    'customer_name',
+    'order_id',
+    'pickup_address',
+    'pickup_time_slot',
+  ],
 };
 
 const EXAMPLE_EVENTS = [
@@ -303,7 +312,10 @@ export function IntegrationsApiPanel() {
           <CardDescription className="text-slate-400">
             Templates must be <strong className="text-slate-200">Approved</strong>{' '}
             on Meta. Use <code className="text-slate-300">variableOrder</code> to
-            map names to Meta placeholders {'{{1}}'}, {'{{2}}'}.
+            map names to Meta placeholders {'{{1}}'}, {'{{2}}'}. For image-header
+            templates (e.g. pickup_confirmation), upload media once under{' '}
+            <strong className="text-slate-200">Settings → Templates</strong> — no{' '}
+            <code className="text-slate-300">headerMedia</code> needed in each API call.
           </CardDescription>
         </CardHeader>
         <CardContent>

@@ -14,6 +14,10 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit'
+import {
+  buildBroadcastRecipientSendPlan,
+  loadBroadcastTemplateContext,
+} from '@/lib/whatsapp/broadcast-template-send'
 
 interface BroadcastResult {
   phone: string
@@ -22,28 +26,6 @@ interface BroadcastResult {
   error?: string
 }
 
-/**
- * Two input shapes are accepted:
- *
- *   NEW (preferred — supports per-recipient variable substitution):
- *     {
- *       recipients: Array<{ phone: string; params: string[] }>,
- *       template_name, template_language
- *     }
- *
- *   LEGACY (all phones receive the same params — kept so existing
- *   callers don't break):
- *     {
- *       phone_numbers: string[],
- *       template_params: string[],
- *       template_name, template_language
- *     }
- *
- * Previous implementation only supported the legacy shape, and the
- * sending hook was forced to ship every batch with `templateParams[0]`
- * — meaning every recipient got contact-0's personalization. The new
- * shape is what actually fixes that.
- */
 interface NewRecipient {
   phone: string
   params?: string[]
@@ -62,9 +44,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Per-user broadcast budget. Note: this limits how often a user
-    // can *start* a campaign, not how many messages go out inside
-    // one — the fan-out loop below runs without additional gating.
     const limit = checkRateLimit(`broadcast:${user.id}`, RATE_LIMITS.broadcast)
     if (!limit.success) {
       return rateLimitResponse(limit)
@@ -79,7 +58,6 @@ export async function POST(request: Request) {
       template_params,
     } = body
 
-    // Normalize to a list of {phone, params} regardless of shape.
     let recipients: NewRecipient[]
     if (Array.isArray(newRecipients) && newRecipients.length > 0) {
       recipients = newRecipients
@@ -97,14 +75,14 @@ export async function POST(request: Request) {
           error:
             'Provide either `recipients` (preferred) or `phone_numbers` — must be a non-empty array',
         },
-        { status: 400 }
+        { status: 400 },
       )
     }
 
     if (!template_name) {
       return NextResponse.json(
         { error: 'template_name is required' },
-        { status: 400 }
+        { status: 400 },
       )
     }
 
@@ -120,11 +98,44 @@ export async function POST(request: Request) {
           error:
             'WhatsApp not configured. Please set up your WhatsApp integration first.',
         },
-        { status: 400 }
+        { status: 400 },
       )
     }
 
     const accessToken = decrypt(config.access_token)
+
+    let templateCtx
+    try {
+      templateCtx = await loadBroadcastTemplateContext(supabase, {
+        userId: user.id,
+        templateName: template_name,
+        templateLanguage: template_language,
+        wabaId: config.waba_id,
+        accessToken,
+      })
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to load template'
+      return NextResponse.json({ error: message }, { status: 400 })
+    }
+
+    if (!templateCtx.bodyText) {
+      return NextResponse.json(
+        {
+          error: `Template "${template_name}" not found. Sync from Meta in Settings → Templates.`,
+        },
+        { status: 400 },
+      )
+    }
+
+    // Fail fast before sending thousands of messages with a bad config.
+    try {
+      buildBroadcastRecipientSendPlan(templateCtx, recipients[0]?.params ?? [])
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Invalid template configuration'
+      return NextResponse.json({ error: message }, { status: 400 })
+    }
 
     const results: BroadcastResult[] = []
     let sentCount = 0
@@ -150,8 +161,24 @@ export async function POST(request: Request) {
         )
       }
 
-      // Retry with phone variants on "not in allowed list" so numbers
-      // that differ only in a trunk-prefix 0 still reach recipients.
+      let sendPlan
+      try {
+        sendPlan = buildBroadcastRecipientSendPlan(
+          templateCtx,
+          recipient.params ?? [],
+        )
+      } catch (err) {
+        const errorMessage =
+          err instanceof Error ? err.message : 'Template parameter error'
+        results.push({
+          phone: recipient.phone,
+          status: 'failed',
+          error: errorMessage,
+        })
+        failedCount++
+        continue
+      }
+
       const variants = phoneVariants(prepared)
       let sentMessageId: string | null = null
       let lastError: string | null = null
@@ -163,8 +190,13 @@ export async function POST(request: Request) {
             accessToken,
             to: variant,
             templateName: template_name,
-            language: template_language || 'en_US',
-            params: recipient.params ?? [],
+            language: templateCtx.language,
+            bodyParameters: sendPlan.bodyParameters,
+            buttonParameters:
+              sendPlan.buttonParameters.length > 0
+                ? sendPlan.buttonParameters
+                : undefined,
+            headerMedia: sendPlan.headerMedia,
           })
           sentMessageId = result.messageId
           lastError = null
@@ -177,7 +209,6 @@ export async function POST(request: Request) {
             break
           }
           lastError = errorMessage
-          // retry with next variant
         }
       }
 
@@ -191,7 +222,7 @@ export async function POST(request: Request) {
       } else {
         console.error(
           `Failed to send broadcast to ${recipient.phone}:`,
-          lastError
+          lastError,
         )
         results.push({
           phone: recipient.phone,
@@ -213,7 +244,7 @@ export async function POST(request: Request) {
     console.error('Error in WhatsApp broadcast POST:', error)
     return NextResponse.json(
       { error: 'Failed to process broadcast' },
-      { status: 500 }
+      { status: 500 },
     )
   }
 }

@@ -40,9 +40,16 @@ import {
  *       "customer_name": "Lalit",
  *       "order_id": "LD1234"
  *     },
- *     "variableOrder": ["customer_name", "order_id"]
+ *     "variableOrder": ["customer_name", "order_id"],
+ *     "headerMedia": {
+ *       "url": "https://emeraldwash.in/assets/pickup-banner.jpg",
+ *       "type": "image"
+ *     }
  *   }'
  * ```
+ *
+ * Templates with a media header: upload once in Settings → Templates, or
+ * pass headerMedia.url / variables.header_image_url per request.
  *
  * Templates on Meta use {{1}}, {{2}} in the body. Map named variables via:
  *   - variableOrder in the request (see example), or
@@ -85,6 +92,7 @@ export async function POST(request: Request) {
     variables?: Record<string, string>
     variableOrder?: string[]
     language?: string
+    headerMedia?: { url?: string; type?: string; filename?: string }
   }
 
   try {
@@ -120,6 +128,7 @@ export async function POST(request: Request) {
     ? body.variableOrder
     : undefined
   const language = body.language?.trim()
+  const headerMedia = body.headerMedia
 
   const logId = await createNotificationLog({
     userId,
@@ -134,6 +143,7 @@ export async function POST(request: Request) {
       variables: normalizedVariables,
       variableOrder,
       language,
+      headerMedia,
     },
   })
 
@@ -145,6 +155,7 @@ export async function POST(request: Request) {
       variables: normalizedVariables,
       variableOrder,
       language,
+      headerMedia,
       logId,
     })
 

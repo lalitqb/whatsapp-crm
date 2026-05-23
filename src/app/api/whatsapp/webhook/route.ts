@@ -13,6 +13,7 @@ import {
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { isValidStatusTransition } from '@/lib/whatsapp/status-transitions'
 import { applyMetaStatusToNotificationLog } from '@/lib/notifications/notification-log'
+import { runInboundAiAgent } from '@/lib/ai/agent-runner'
 
 // Lazy-initialized to avoid build-time crash when env vars are missing
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -661,6 +662,16 @@ async function processMessage(
       },
     }).catch((err) => console.error('[automations] dispatch failed:', err))
   }
+
+  // AI agent (if enabled for this account) — after DB + automations
+  runInboundAiAgent({
+    userId,
+    conversationId: conversation.id,
+    contactId: contactRecord.id,
+    inboundText,
+    inboundMessageId: message.id,
+    contentType,
+  }).catch((err) => console.error('[ai-agent] dispatch failed:', err))
 }
 
 async function parseMessageContent(

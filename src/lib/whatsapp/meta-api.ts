@@ -30,8 +30,12 @@ interface MetaErrorResponse {
 async function throwMetaError(response: Response, fallback: string): Promise<never> {
   let message = fallback
   try {
-    const data = (await response.json()) as MetaErrorResponse
+    const data = (await response.json()) as MetaErrorResponse & {
+      error?: { error_data?: { details?: string } }
+    }
     if (data.error?.message) message = data.error.message
+    const details = data.error?.error_data?.details
+    if (details) message = `${message} (${details})`
   } catch {
     // response body wasn't JSON — keep the fallback
   }
@@ -113,13 +117,40 @@ export async function sendTextMessage(
   return { messageId: data.messages[0].id }
 }
 
+export interface TemplateBodyParameter {
+  type: 'text'
+  text: string
+  parameter_name?: string
+}
+
+export interface TemplateUrlButtonParameter {
+  /** Button index in the template (0 = first URL button) */
+  index: number
+  parameters: TemplateBodyParameter[]
+}
+
+export type TemplateHeaderMediaType = 'image' | 'video' | 'document'
+
+/** Media header for templates approved with IMAGE / VIDEO / DOCUMENT header. */
+export interface TemplateHeaderMediaParameter {
+  type: TemplateHeaderMediaType
+  /** Public HTTPS URL — Meta fetches this when sending. */
+  url: string
+  /** Used when type is document (e.g. invoice.pdf). */
+  filename?: string
+}
+
 export interface SendTemplateMessageArgs {
   phoneNumberId: string
   accessToken: string
   to: string
   templateName: string
   language?: string
+  /** @deprecated Prefer bodyParameters for named Meta templates */
   params?: string[]
+  bodyParameters?: TemplateBodyParameter[]
+  buttonParameters?: TemplateUrlButtonParameter[]
+  headerMedia?: TemplateHeaderMediaParameter
   /** Meta's message_id of the message being replied to. */
   contextMessageId?: string
 }
@@ -138,6 +169,9 @@ export async function sendTemplateMessage(
     templateName,
     language = 'en_US',
     params,
+    bodyParameters,
+    buttonParameters,
+    headerMedia,
     contextMessageId,
   } = args
   const url = `${META_API_BASE}/${phoneNumberId}/messages`
@@ -147,13 +181,58 @@ export async function sendTemplateMessage(
     language: { code: language },
   }
 
-  if (params && params.length > 0) {
-    template.components = [
-      {
-        type: 'body',
-        parameters: params.map((p) => ({ type: 'text', text: String(p) })),
-      },
-    ]
+  const bodyParams =
+    bodyParameters ??
+    (params?.map((p) => ({ type: 'text' as const, text: String(p) })) ?? [])
+
+  const mapTextParams = (list: TemplateBodyParameter[]) =>
+    list.map((p) => {
+      const param: Record<string, string> = {
+        type: 'text',
+        text: p.text,
+      }
+      if (p.parameter_name) {
+        param.parameter_name = p.parameter_name
+      }
+      return param
+    })
+
+  const components: Array<Record<string, unknown>> = []
+
+  if (headerMedia) {
+    const mediaPayload: Record<string, unknown> = { link: headerMedia.url }
+    if (headerMedia.type === 'document' && headerMedia.filename) {
+      mediaPayload.filename = headerMedia.filename
+    }
+    components.push({
+      type: 'header',
+      parameters: [
+        {
+          type: headerMedia.type,
+          [headerMedia.type]: mediaPayload,
+        },
+      ],
+    })
+  }
+
+  if (bodyParams.length > 0) {
+    components.push({
+      type: 'body',
+      parameters: mapTextParams(bodyParams),
+    })
+  }
+
+  for (const btn of buttonParameters ?? []) {
+    components.push({
+      type: 'button',
+      sub_type: 'url',
+      index: String(btn.index),
+      parameters: mapTextParams(btn.parameters),
+    })
+  }
+
+  if (components.length > 0) {
+    template.components = components
   }
 
   const body: Record<string, unknown> = {

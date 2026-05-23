@@ -51,6 +51,20 @@ export function statusAfterMetaCreate(meta: { status?: string }): 'Pending' | 'A
 }
 
 /** Meta requires lowercase names with underscores only. */
+/** Meta locale codes are case-sensitive (e.g. en_US, not en_us). */
+export function normalizeMetaLanguageCode(code?: string | null): string {
+  if (!code?.trim()) return 'en_US'
+  const parts = code.trim().replace(/-/g, '_').split('_')
+  const lang = parts[0]?.toLowerCase() ?? 'en'
+  if (parts.length === 1) {
+    if (lang === 'en') return 'en_US'
+    if (lang === 'hi') return 'hi_IN'
+    return lang
+  }
+  const region = parts.slice(1).join('_').toUpperCase()
+  return `${lang}_${region}`
+}
+
 export function normalizeTemplateName(name: string): string {
   return name
     .trim()

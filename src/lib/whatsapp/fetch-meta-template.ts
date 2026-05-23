@@ -1,13 +1,15 @@
-import { categoryFromMeta, statusFromMeta } from '@/lib/whatsapp/template-meta'
+import {
+  categoryFromMeta,
+  normalizeMetaLanguageCode,
+  statusFromMeta,
+} from '@/lib/whatsapp/template-meta'
+import {
+  getDynamicUrlButtonIndexes,
+  type MetaTemplateComponent,
+} from '@/lib/whatsapp/template-components'
 
 const META_API_VERSION = 'v21.0'
 const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`
-
-interface MetaTemplateComponent {
-  type: string
-  text?: string
-  format?: string
-}
 
 interface MetaTemplate {
   id: string
@@ -15,6 +17,7 @@ interface MetaTemplate {
   language: string
   status: string
   category: string
+  parameter_format?: string
   components?: MetaTemplateComponent[]
 }
 
@@ -24,15 +27,22 @@ export interface ResolvedTemplateRow {
   body_text: string
   status: 'Draft' | 'Pending' | 'Approved' | 'Rejected'
   variable_mapping?: Record<string, number | string> | null
+  components?: MetaTemplateComponent[]
+  url_button_indexes?: number[]
+  parameter_format?: string | null
 }
 
 function parseMetaTemplate(t: MetaTemplate): ResolvedTemplateRow {
-  const body = (t.components ?? []).find((c) => c.type === 'BODY')
+  const components = t.components ?? []
+  const body = components.find((c) => c.type === 'BODY' || c.type === 'body')
   return {
     name: t.name,
     language: t.language,
     body_text: body?.text ?? '',
     status: statusFromMeta(t.status),
+    components,
+    url_button_indexes: getDynamicUrlButtonIndexes(components),
+    parameter_format: t.parameter_format ?? null,
   }
 }
 
@@ -48,7 +58,7 @@ export async function fetchMetaTemplateByName(args: {
   const { wabaId, accessToken, name, language } = args
   const params = new URLSearchParams({
     limit: '100',
-    fields: 'id,name,language,status,category,components',
+    fields: 'id,name,language,status,category,components,parameter_format',
     name,
   })
 
@@ -66,7 +76,10 @@ export async function fetchMetaTemplateByName(args: {
   if (matches.length === 0) return null
 
   if (language) {
-    const exact = matches.find((t) => t.language === language)
+    const normalized = normalizeMetaLanguageCode(language)
+    const exact = matches.find(
+      (t) => t.language === language || t.language === normalized,
+    )
     if (exact) return parseMetaTemplate(exact)
   }
 

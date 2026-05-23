@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchMetaTemplateByName } from '@/lib/whatsapp/fetch-meta-template'
+import type { MetaTemplateComponent } from '@/lib/whatsapp/template-components'
+import { normalizeMetaLanguageCode } from '@/lib/whatsapp/template-meta'
 
 export interface TemplateForSend {
   name: string
@@ -7,6 +9,12 @@ export interface TemplateForSend {
   body_text: string
   status: 'Draft' | 'Pending' | 'Approved' | 'Rejected'
   variable_mapping?: Record<string, number | string> | null
+  components?: MetaTemplateComponent[]
+  url_button_indexes?: number[]
+  parameter_format?: string | null
+  header_type?: string | null
+  header_media_url?: string | null
+  header_media_filename?: string | null
 }
 
 function pickLocalTemplate(
@@ -15,7 +23,12 @@ function pickLocalTemplate(
 ): TemplateForSend | null {
   if (rows.length === 0) return null
   if (language) {
-    return rows.find((r) => r.language === language) ?? null
+    const normalized = normalizeMetaLanguageCode(language)
+    return (
+      rows.find(
+        (r) => r.language === language || r.language === normalized,
+      ) ?? null
+    )
   }
   const approved = rows.find((r) => r.status === 'Approved')
   return approved ?? rows[0]
@@ -39,7 +52,9 @@ export async function resolveTemplateForSend(
   // Base columns only — variable_mapping is optional (migration 010).
   const { data: localRows, error: localError } = await db
     .from('message_templates')
-    .select('name, language, body_text, status')
+    .select(
+      'name, language, body_text, status, variable_mapping, header_type, header_media_url, header_media_filename',
+    )
     .eq('user_id', userId)
     .eq('name', templateName)
 

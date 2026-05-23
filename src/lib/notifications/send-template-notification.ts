@@ -8,7 +8,13 @@ import {
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
 import { resolveTemplateForSend } from '@/lib/notifications/resolve-template'
-import { resolveNamedTemplateParams } from '@/lib/whatsapp/template-params'
+import { fetchMetaTemplateByName } from '@/lib/whatsapp/fetch-meta-template'
+import { normalizeMetaLanguageCode } from '@/lib/whatsapp/template-meta'
+import {
+  buildTemplateSendPlanFromSources,
+  type HeaderMediaInput,
+} from '@/lib/whatsapp/template-send-plan'
+import { headerTypeToMediaType } from '@/lib/whatsapp/template-header-media'
 import { markNotificationLogSent } from '@/lib/notifications/notification-log'
 
 export interface SendTemplateNotificationInput {
@@ -18,6 +24,8 @@ export interface SendTemplateNotificationInput {
   variables?: Record<string, string>
   variableOrder?: string[]
   language?: string
+  /** Image/video/document header — public HTTPS URL required by Meta */
+  headerMedia?: HeaderMediaInput | null
   /** Row in notification_logs created before send */
   logId?: string | null
 }
@@ -48,6 +56,7 @@ export async function sendTemplateNotification(
     variables = {},
     variableOrder,
     language: languageOverride,
+    headerMedia,
   } = input
 
   const preparedPhone = preparePhoneForMeta(customerPhone)
@@ -70,6 +79,8 @@ export async function sendTemplateNotification(
   }
 
   const lang = languageOverride?.trim()
+    ? normalizeMetaLanguageCode(languageOverride.trim())
+    : undefined
 
   if (!config.waba_id) {
     throw new Error('WABA ID missing in WhatsApp config.')
@@ -96,12 +107,46 @@ export async function sendTemplateNotification(
     | null
     | undefined
 
-  const params = resolveNamedTemplateParams(template.body_text, variables, {
-    mapping,
-    variableOrder,
+  const metaTemplate = await fetchMetaTemplateByName({
+    wabaId: config.waba_id,
+    accessToken,
+    name: template.name,
+    language: lang || template.language,
   })
 
-  const language = lang || template.language || 'en_US'
+  const language = normalizeMetaLanguageCode(
+    lang || metaTemplate?.language || template.language || 'en_US',
+  )
+
+  const storedHeaderMedia: HeaderMediaInput | null =
+    !headerMedia && template.header_media_url
+      ? {
+          url: template.header_media_url,
+          type: headerTypeToMediaType(template.header_type),
+          filename: template.header_media_filename ?? undefined,
+        }
+      : null
+
+  const sendPlan = buildTemplateSendPlanFromSources(
+    metaTemplate
+      ? {
+          body_text: metaTemplate.body_text,
+          components: metaTemplate.components,
+          parameter_format: metaTemplate.parameter_format,
+        }
+      : null,
+    { body_text: template.body_text },
+    variables,
+    {
+      mapping,
+      variableOrder,
+      headerMedia: headerMedia ?? storedHeaderMedia,
+    },
+  )
+
+  const bodyParameters = sendPlan.bodyParameters
+  const buttonParameters = sendPlan.buttonParameters
+  const headerMediaParam = sendPlan.headerMedia
 
   const variants = phoneVariants(preparedPhone)
   let messageId: string | null = null
@@ -116,7 +161,10 @@ export async function sendTemplateNotification(
         to: variant,
         templateName: template.name,
         language,
-        params,
+        bodyParameters,
+        buttonParameters:
+          buttonParameters.length > 0 ? buttonParameters : undefined,
+        headerMedia: headerMediaParam,
       })
       messageId = result.messageId
       workingPhone = variant
