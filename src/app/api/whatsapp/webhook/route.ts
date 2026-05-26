@@ -1,3 +1,4 @@
+import { after } from 'next/server'
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
@@ -221,14 +222,23 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  // Process asynchronously so we can ack Meta within their timeout.
-  processWebhook(body).catch((error) => {
-    logWebhookError('POST processing error', error)
+  // Ack Meta immediately, then finish processing on Vercel/Node. A bare
+  // `processWebhook(...)` without `after()` is killed when the serverless
+  // function returns 200 — automations never ran in production.
+  after(async () => {
+    try {
+      await processWebhook(body)
+    } catch (error) {
+      logWebhookError('POST processing error', error)
+    }
   })
 
   logWebhook('POST ack sent to Meta (200 received)')
   return NextResponse.json({ status: 'received' }, { status: 200 })
 }
+
+/** Allow template sends + automations to finish on Vercel (default is 10s). */
+export const maxDuration = 60
 
 async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
   if (!body.entry) {
@@ -634,8 +644,6 @@ async function processMessage(
   // Fire any automations that react to this webhook event. All dispatches
   // run here (not earlier) so the contact, conversation, and inbound
   // message all exist before any step — including send_message — runs.
-  // Fire-and-forget: a slow or failing automation must not block the
-  // webhook's 200 OK response to Meta.
   const inboundText = contentText ?? message.text?.body ?? ''
   const automationTriggers: (
     | 'new_contact_created'
@@ -651,17 +659,19 @@ async function processMessage(
   // listens to only one trigger runs only when that trigger matches.
   if (contactOutcome.wasCreated) automationTriggers.unshift('new_contact_created')
   if (isFirstInboundMessage) automationTriggers.unshift('first_inbound_message')
-  for (const triggerType of automationTriggers) {
-    runAutomationsForTrigger({
-      userId,
-      triggerType,
-      contactId: contactRecord.id,
-      context: {
-        message_text: inboundText,
-        conversation_id: conversation.id,
-      },
-    }).catch((err) => console.error('[automations] dispatch failed:', err))
-  }
+  await Promise.all(
+    automationTriggers.map((triggerType) =>
+      runAutomationsForTrigger({
+        userId,
+        triggerType,
+        contactId: contactRecord.id,
+        context: {
+          message_text: inboundText,
+          conversation_id: conversation.id,
+        },
+      }),
+    ),
+  )
 
   // AI agent (if enabled for this account) — after DB + automations
   runInboundAiAgent({
