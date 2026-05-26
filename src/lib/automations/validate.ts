@@ -132,6 +132,11 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
     case 'http_request':
       if (!nonEmpty(c.url)) {
         issues.push({ path: `${path}.url`, message: 'URL is required' })
+      } else {
+        const urlIssue = hexanovaBookingUrlIssue(String(c.url))
+        if (urlIssue) {
+          issues.push({ path: `${path}.url`, message: urlIssue })
+        }
       }
       if (!nonEmpty(c.store_as)) {
         issues.push({ path: `${path}.store_as`, message: 'store_as variable name is required' })
@@ -214,4 +219,25 @@ export function validateTriggerForActivation(
 
 function nonEmpty(v: unknown): boolean {
   return typeof v === 'string' && v.trim().length > 0
+}
+
+/**
+ * Hexanova hosts use /api/bookings/... — flag only URLs that skip the /api segment
+ * (e.g. .../bookings/customer). Valid: .../api/bookings/customer?phone=...
+ */
+export function hexanovaBookingUrlIssue(url: string): string | null {
+  const trimmed = url.trim()
+  if (!trimmed) return null
+  const lower = trimmed.toLowerCase()
+  if (!lower.includes('hexanova') || !lower.includes('bookings')) return null
+
+  if (/\.in\/api\/bookings(\/|$|\?)/i.test(trimmed) || /\/api\/bookings(\/|$|\?)/i.test(trimmed)) {
+    return null
+  }
+
+  if (/\.in\/bookings(\/|$|\?)/i.test(trimmed) || /\/bookings(\/|$|\?)/i.test(lower)) {
+    return 'Hexanova booking URLs need /api/ in the path (e.g. https://api.hexanova.in/api/bookings/customer)'
+  }
+
+  return null
 }

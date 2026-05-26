@@ -157,7 +157,7 @@ export const AUTOMATION_TEMPLATES: Record<TemplateSlug, AutomationTemplateDefini
         step_type: 'http_request',
         step_config: {
           method: 'GET',
-          url: 'https://api.example.com/bookings/customer?phone={{contact.phone_primary}}',
+          url: 'https://api.hexanova.in/api/bookings/customer?phone={{contact.phone_primary}}',
           headers: { ...PLACEHOLDER_API_HEADERS },
           store_as: 'customer_lookup',
         },
@@ -198,7 +198,7 @@ export const AUTOMATION_TEMPLATES: Record<TemplateSlug, AutomationTemplateDefini
         step_type: 'http_request',
         step_config: {
           method: 'POST',
-          url: 'https://api.example.com/bookings',
+          url: 'https://api.hexanova.in/api/bookings',
           headers: { ...PLACEHOLDER_API_HEADERS, 'Content-Type': 'application/json' },
           body_template: EXISTING_BOOKING_BODY,
           store_as: 'booking_result',
@@ -274,7 +274,7 @@ export const AUTOMATION_TEMPLATES: Record<TemplateSlug, AutomationTemplateDefini
         step_type: 'http_request',
         step_config: {
           method: 'POST',
-          url: 'https://api.example.com/bookings',
+          url: 'https://api.hexanova.in/api/bookings',
           headers: { ...PLACEHOLDER_API_HEADERS, 'Content-Type': 'application/json' },
           body_template: NEW_BOOKING_BODY,
           store_as: 'booking_result',

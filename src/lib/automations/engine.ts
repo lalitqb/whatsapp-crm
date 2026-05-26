@@ -1,6 +1,9 @@
 import { startPickupBookingFlow } from '@/lib/automations/pickup-booking-flow'
 import { messageMatchesKeywordTrigger } from '@/lib/automations/trigger-config'
-import { normalizeCustomerPayload } from '@/lib/integrations/hexanova-booking'
+import {
+  normalizeCustomerPayload,
+  parseCustomerLookupResult,
+} from '@/lib/integrations/hexanova-booking'
 import { isWebhookVerbose, logWebhook } from '@/lib/whatsapp/webhook-logger'
 import type {
   Automation,
@@ -348,8 +351,13 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<boolean> {
           },
           { onConflict: 'user_id,contact_id,automation_id' },
         )
-        if (sessErr?.code === '42P01') {
-          throw new Error('automation_flow_sessions table missing — run migration 015')
+        if (
+          sessErr?.code === '42P01' ||
+          sessErr?.message?.includes('automation_flow_sessions')
+        ) {
+          throw new Error(
+            'Multi-turn automations need the automation_flow_sessions table. In Supabase → SQL Editor, run supabase/migrations/015_automation_flow_sessions.sql',
+          )
         }
         if (sessErr) throw new Error(sessErr.message)
         results.push({
@@ -592,14 +600,21 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       } catch {
         // keep raw text
       }
+
+      const vars = { ...(args.context.vars ?? {}) }
+
+      // Customer lookup: 404 / not-found means "new customer" — continue to condition No branch.
+      if (!res.ok && isCustomerLookupUrl(url) && isCustomerNotFoundResponse(res.status, data)) {
+        applyCustomerLookupMiss(vars, cfg.store_as, data)
+        args.context.vars = vars
+        return `customer lookup ${res.status} → vars.customer_found=false`
+      }
+
       if (!res.ok) {
-        const errMsg =
-          typeof data === 'object' && data !== null && 'message' in data
-            ? String((data as { message: unknown }).message)
-            : text || `HTTP ${res.status}`
+        const errMsg = httpErrorMessage(data, text, res.status)
         throw new Error(`http_request ${res.status}: ${errMsg}`)
       }
-      const vars = { ...(args.context.vars ?? {}) }
+
       applyHttpResponseToVars(url, data, vars, cfg.store_as)
       args.context.vars = vars
       return `stored in vars.${cfg.store_as}`
@@ -756,6 +771,69 @@ function interpolateHeaders(
   return out
 }
 
+function isCustomerLookupUrl(url: string): boolean {
+  return url.includes('bookings/customer')
+}
+
+/** 404 or API "not found" payloads → treat as no existing customer (run condition No branch). */
+function isCustomerNotFoundResponse(status: number, data: unknown): boolean {
+  if (status === 404) return true
+  if (status !== 400 && status !== 422) return false
+  if (!data || typeof data !== 'object') return false
+  const msg = String(
+    (data as Record<string, unknown>).error ??
+      (data as Record<string, unknown>).message ??
+      '',
+  ).toLowerCase()
+  return msg.includes('not found') || msg.includes('no customer')
+}
+
+function applyCustomerLookupMiss(
+  vars: Record<string, unknown>,
+  storeAs: string,
+  data: unknown,
+): void {
+  vars[storeAs] = data
+  vars.customer_found = false
+  delete vars.customer
+  delete vars.customer_name
+  delete vars.customer_locality
+  delete vars.customer_address
+  delete vars.customer_phone
+}
+
+function httpErrorMessage(data: unknown, rawText: string, status: number): string {
+  if (typeof data === 'object' && data !== null) {
+    const row = data as Record<string, unknown>
+    if (row.error != null) return String(row.error)
+    if (row.message != null) return String(row.message)
+  }
+  return rawText || `HTTP ${status}`
+}
+
+function applyCustomerLookupToVars(
+  vars: Record<string, unknown>,
+  storeAs: string,
+  data: unknown,
+): void {
+  vars[storeAs] = data
+  const { found, customer } = parseCustomerLookupResult(data)
+  vars.customer_found = found
+  if (customer) {
+    vars.customer = customer
+    vars.customer_name = customer.name ?? ''
+    vars.customer_locality = customer.locality ?? ''
+    vars.customer_address = customer.pickupAddress ?? ''
+    if (customer.phonePrimary) vars.customer_phone = customer.phonePrimary
+  } else {
+    delete vars.customer
+    delete vars.customer_name
+    delete vars.customer_locality
+    delete vars.customer_address
+    delete vars.customer_phone
+  }
+}
+
 function applyHttpResponseToVars(
   url: string,
   data: unknown,
@@ -763,17 +841,8 @@ function applyHttpResponseToVars(
   storeAs: string,
 ): void {
   vars[storeAs] = data
-  if (!url.includes('bookings/customer')) return
-
-  const customer = normalizeCustomerPayload(data)
-  vars.customer_found = Boolean(customer)
-  if (customer) {
-    vars.customer = customer
-    vars.customer_name = customer.name ?? ''
-    vars.customer_locality = customer.locality ?? ''
-    vars.customer_address = customer.pickupAddress ?? ''
-    if (customer.phonePrimary) vars.customer_phone = customer.phonePrimary
-  }
+  if (!isCustomerLookupUrl(url)) return
+  applyCustomerLookupToVars(vars, storeAs, data)
 }
 
 async function loadContactForAutomation(

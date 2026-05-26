@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  hexanovaBookingUrlIssue,
   validateStepsForActivation,
   validateTriggerForActivation,
 } from "./validate";
@@ -132,6 +133,35 @@ describe("validateStepsForActivation", () => {
       "steps[0].value",
       "steps[1].field",
     ]);
+  });
+
+  it("accepts correct Hexanova customer lookup URLs", () => {
+    expect(
+      hexanovaBookingUrlIssue(
+        "http://api.hexanova.in/api/bookings/customer?phone=7903949014",
+      ),
+    ).toBeNull();
+    expect(
+      hexanovaBookingUrlIssue(
+        "https://api.hexanova.in/api/bookings/customer?phone={{contact.phone_primary}}",
+      ),
+    ).toBeNull();
+    expect(hexanovaBookingUrlIssue("https://api.hexanova.in/api/bookings")).toBeNull();
+  });
+
+  it("rejects Hexanova URLs that omit /api/ before bookings", () => {
+    expect(hexanovaBookingUrlIssue("https://api.hexanova.in/bookings/customer")).not.toBeNull();
+    const issues = validateStepsForActivation([
+      {
+        step_type: "http_request",
+        step_config: {
+          url: "http://api.hexanova.in/bookings/customer",
+          method: "GET",
+          store_as: "customer_lookup",
+        },
+      },
+    ]);
+    expect(issues.some((i) => i.path === "steps[0].url")).toBe(true);
   });
 
   it("recursively walks condition branches with stable dot-paths", () => {

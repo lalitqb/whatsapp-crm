@@ -191,6 +191,40 @@ export function normalizeCustomerPayload(data: unknown): HexanovaCustomerProfile
   }
 }
 
+/**
+ * Hexanova customer lookup: `{ success, data: { found, name, ... } }`.
+ * Used by automation http_request steps after GET /bookings/customer.
+ */
+export function parseCustomerLookupResult(data: unknown): {
+  found: boolean
+  customer: HexanovaCustomerProfile | null
+} {
+  if (!data || typeof data !== 'object') {
+    return { found: false, customer: null }
+  }
+
+  const root = data as Record<string, unknown>
+
+  if (root.success === false) {
+    return { found: false, customer: null }
+  }
+
+  const block = root.data
+  if (block && typeof block === 'object' && !Array.isArray(block)) {
+    const row = block as Record<string, unknown>
+    if (row.found === false) {
+      return { found: false, customer: null }
+    }
+    if (row.found === true) {
+      const customer = normalizeCustomerPayload(data)
+      return { found: Boolean(customer), customer }
+    }
+  }
+
+  const customer = normalizeCustomerPayload(data)
+  return { found: Boolean(customer), customer }
+}
+
 function pickString(obj: Record<string, unknown>, keys: string[]): string | null {
   for (const k of keys) {
     const v = obj[k]

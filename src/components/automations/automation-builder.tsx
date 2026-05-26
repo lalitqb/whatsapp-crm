@@ -438,6 +438,7 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
           <StepList
             steps={state.steps}
             parentPath={[]}
+            parentScope={{ kind: "root" }}
             expandedId={expandedId}
             setExpandedId={setExpandedId}
             updateStep={updateStep}
@@ -656,6 +657,7 @@ type StepPath = (
 interface StepListProps {
   steps: BuilderStep[]
   parentPath: StepPath
+  parentScope: ParentScope
   expandedId: string | null
   setExpandedId: (id: string | null) => void
   updateStep: (path: StepPath, updater: (s: BuilderStep) => BuilderStep) => void
@@ -665,16 +667,8 @@ interface StepListProps {
 }
 
 function StepList(props: StepListProps) {
-  const { steps, parentPath, ...rest } = props
-  const inBranch = parentPath.some((p) => p.kind === "branch")
-  const parentScope: ParentScope =
-    parentPath.length === 0
-      ? { kind: "root" }
-      : (() => {
-          const last = parentPath[parentPath.length - 1]
-          if (last.kind !== "branch") return { kind: "root" } as const
-          return { kind: "branch", parentCid: last.parentCid, branch: last.branch } as const
-        })()
+  const { steps, parentPath, parentScope, ...rest } = props
+  const inBranch = parentScope.kind === "branch"
 
   return (
     <div
@@ -723,7 +717,7 @@ function StepRenderer({
   const Icon = meta.icon
   const expanded = props.expandedId === step.cid
   const isCondition = step.step_type === "condition"
-  const inBranch = parentPath.some((p) => p.kind === "branch")
+  const inBranch = parentScope.kind === "branch"
   const hasBranches =
     isCondition &&
     ((step.branches?.yes?.length ?? 0) > 0 || (step.branches?.no?.length ?? 0) > 0)
@@ -774,10 +768,19 @@ function StepRenderer({
             />
           </button>
           {expanded && (
-            <div className="border-t border-slate-800 px-4 py-3">
+            <div
+              className="border-t border-slate-800 px-4 py-3"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
               <StepEditor
                 step={step}
-                onChange={(next) => props.updateStep(path, () => next)}
+                onPatchConfig={(patch) =>
+                  props.updateStep(path, (s) => ({
+                    ...s,
+                    step_config: { ...s.step_config, ...patch },
+                  }))
+                }
               />
               <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-800 pt-3">
                 <div className="flex gap-1">
@@ -832,20 +835,9 @@ function ConditionBranches({
 }: {
   step: BuilderStep
   parentPath: StepPath
-} & Omit<StepListProps, "steps" | "parentPath">) {
+} & Omit<StepListProps, "steps" | "parentPath" | "parentScope">) {
   const yes = step.branches?.yes ?? []
   const no = step.branches?.no ?? []
-  // Build the child scope by appending a branch marker. The scope the
-  // StepList uses is driven by the LAST element of parentPath, so the
-  // tail's `index` doesn't matter — it's replaced per child during walks.
-  const yesPath: StepPath = [
-    ...parentPath,
-    { kind: "branch", parentCid: step.cid, branch: "yes", index: 0 },
-  ]
-  const noPath: StepPath = [
-    ...parentPath,
-    { kind: "branch", parentCid: step.cid, branch: "no", index: 0 },
-  ]
   const inBranch = parentPath.some((p) => p.kind === "branch")
 
   return (
@@ -856,10 +848,20 @@ function ConditionBranches({
       )}
     >
       <BranchColumn label="Yes" color="text-violet-400">
-        <StepList {...props} steps={yes} parentPath={yesPath} />
+        <StepList
+          {...props}
+          steps={yes}
+          parentPath={parentPath}
+          parentScope={{ kind: "branch", parentCid: step.cid, branch: "yes" }}
+        />
       </BranchColumn>
       <BranchColumn label="No" color="text-rose-400">
-        <StepList {...props} steps={no} parentPath={noPath} />
+        <StepList
+          {...props}
+          steps={no}
+          parentPath={parentPath}
+          parentScope={{ kind: "branch", parentCid: step.cid, branch: "no" }}
+        />
       </BranchColumn>
     </div>
   )
@@ -1042,19 +1044,143 @@ function normalizeStepsForApi(steps: BuilderStep[]): BuilderStep[] {
 }
 
 // ------------------------------------------------------------
+// HTTP Request editor (local draft — reliable inside Yes/No branches)
+// ------------------------------------------------------------
+
+function HttpRequestStepEditor({
+  stepCid,
+  config,
+  onPatchConfig,
+}: {
+  stepCid: string
+  config: Record<string, unknown>
+  onPatchConfig: (patch: Record<string, unknown>) => void
+}) {
+  const toDraft = (c: Record<string, unknown>) => ({
+    method: (c.method as string) || "GET",
+    url: (c.url as string) || "",
+    headersText: formatJsonObjectFieldValue(c.headers),
+    body_template: (c.body_template as string) || "",
+    store_as: (c.store_as as string) || "",
+  })
+
+  const [draft, setDraft] = useState(() => toDraft(config))
+  const [headersError, setHeadersError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setDraft(toDraft(config))
+    setHeadersError(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset draft only when switching steps
+  }, [stepCid])
+
+  function patch(partial: Partial<ReturnType<typeof toDraft>>) {
+    const next = { ...draft, ...partial }
+    setDraft(next)
+    const patchPayload: Record<string, unknown> = {}
+    if (partial.method !== undefined) patchPayload.method = next.method
+    if (partial.url !== undefined) patchPayload.url = next.url
+    if (partial.body_template !== undefined) patchPayload.body_template = next.body_template
+    if (partial.store_as !== undefined) patchPayload.store_as = next.store_as
+    if (Object.keys(patchPayload).length > 0) onPatchConfig(patchPayload)
+  }
+
+  return (
+    <div className="relative z-20 space-y-0" onPointerDown={(e) => e.stopPropagation()}>
+      <FieldBlock label="Method">
+        <select
+          value={draft.method}
+          onChange={(e) => patch({ method: e.target.value })}
+          className="w-full rounded-md border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-white"
+        >
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+          <option value="PUT">PUT</option>
+          <option value="PATCH">PATCH</option>
+        </select>
+      </FieldBlock>
+      <FieldBlock label="URL">
+        <input
+          type="text"
+          value={draft.url}
+          onChange={(e) => patch({ url: e.target.value })}
+          placeholder="https://api.hexanova.in/api/bookings/customer?phone={{contact.phone_primary}}"
+          className="h-8 w-full min-w-0 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 font-mono text-xs text-white outline-none focus-visible:border-violet-500 focus-visible:ring-2 focus-visible:ring-violet-500/40"
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </FieldBlock>
+      <p className="mb-2 text-[11px] text-slate-500">
+        Variables: {"{{contact.phone_primary}}"}, {"{{vars.pickup_date}}"}, etc. URLs containing{" "}
+        <code className="text-slate-400">bookings/customer</code> set{" "}
+        <code className="text-slate-400">vars.customer_found</code>. A 404/not-found response
+        continues the flow (use your Condition → No branch for new customers).
+      </p>
+      <FieldBlock label="Headers (JSON object)">
+        <textarea
+          value={draft.headersText}
+          onChange={(e) => {
+            setDraft((d) => ({ ...d, headersText: e.target.value }))
+            setHeadersError(null)
+          }}
+          onBlur={(e) => {
+            const result = parseJsonObjectFieldValue(e.target.value)
+            if (!result.ok) {
+              setHeadersError(result.error)
+              return
+            }
+            setHeadersError(null)
+            onPatchConfig({ headers: result.value })
+            setDraft((d) => ({
+              ...d,
+              headersText: JSON.stringify(result.value, null, 2),
+            }))
+          }}
+          className="min-h-16 w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-2 font-mono text-xs text-white outline-none focus-visible:border-violet-500 focus-visible:ring-2 focus-visible:ring-violet-500/40"
+          spellCheck={false}
+        />
+        {headersError ? (
+          <p className="mt-1 text-[11px] text-red-400">{headersError}</p>
+        ) : (
+          <p className="mt-1 text-[11px] text-slate-500">
+            Edit freely; applied when you click away from this field.
+          </p>
+        )}
+      </FieldBlock>
+      <FieldBlock label="Body template (POST/PUT)">
+        <textarea
+          value={draft.body_template}
+          onChange={(e) => patch({ body_template: e.target.value })}
+          className="min-h-24 w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-2 font-mono text-xs text-white outline-none focus-visible:border-violet-500 focus-visible:ring-2 focus-visible:ring-violet-500/40"
+          spellCheck={false}
+        />
+      </FieldBlock>
+      <FieldBlock label="Store response as variable">
+        <input
+          type="text"
+          value={draft.store_as}
+          onChange={(e) => patch({ store_as: e.target.value })}
+          placeholder="booking_result"
+          className="h-8 w-full min-w-0 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 text-sm text-white outline-none focus-visible:border-violet-500 focus-visible:ring-2 focus-visible:ring-violet-500/40"
+          autoComplete="off"
+        />
+      </FieldBlock>
+    </div>
+  )
+}
+
+// ------------------------------------------------------------
 // Per-step config editor
 // ------------------------------------------------------------
 
 function StepEditor({
   step,
-  onChange,
+  onPatchConfig,
 }: {
   step: BuilderStep
-  onChange: (s: BuilderStep) => void
+  onPatchConfig: (patch: Record<string, unknown>) => void
 }) {
   const cfg = step.step_config
-  const set = (patch: Record<string, unknown>) =>
-    onChange({ ...step, step_config: { ...cfg, ...patch } })
+  const set = (patch: Record<string, unknown>) => onPatchConfig(patch)
 
   switch (step.step_type) {
     case "send_message":
@@ -1292,54 +1418,11 @@ function StepEditor({
       )
     case "http_request":
       return (
-        <>
-          <FieldBlock label="Method">
-            <select
-              value={(cfg.method as string) ?? "GET"}
-              onChange={(e) => set({ method: e.target.value })}
-              className="w-full rounded-md border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-white"
-            >
-              <option value="GET">GET</option>
-              <option value="POST">POST</option>
-              <option value="PUT">PUT</option>
-              <option value="PATCH">PATCH</option>
-            </select>
-          </FieldBlock>
-          <FieldBlock label="URL">
-            <Input
-              value={(cfg.url as string) ?? ""}
-              onChange={(e) => set({ url: e.target.value })}
-              placeholder="{{HEXANOVA_BOOKING_API_URL}}/bookings/customer?phone={{contact.phone_primary}}"
-              className="bg-slate-800 font-mono text-xs text-white"
-            />
-          </FieldBlock>
-          <p className="mb-2 text-[11px] text-slate-500">
-            Variables: {"{{contact.phone_primary}}"}, {"{{vars.pickup_date}}"}, etc. Customer
-            lookup URLs containing <code className="text-slate-400">bookings/customer</code> also
-            set <code className="text-slate-400">vars.customer_found</code>.
-          </p>
-          <JsonObjectField
-            label="Headers (JSON object)"
-            fieldKey={`${step.cid}-headers`}
-            value={cfg.headers}
-            onChange={(headers) => set({ headers })}
-          />
-          <FieldBlock label="Body template (POST/PUT)">
-            <Textarea
-              value={(cfg.body_template as string) ?? ""}
-              onChange={(e) => set({ body_template: e.target.value })}
-              className="min-h-24 bg-slate-800 font-mono text-xs text-white"
-            />
-          </FieldBlock>
-          <FieldBlock label="Store response as variable">
-            <Input
-              value={(cfg.store_as as string) ?? ""}
-              onChange={(e) => set({ store_as: e.target.value })}
-              placeholder="customer_lookup"
-              className="bg-slate-800 text-white"
-            />
-          </FieldBlock>
-        </>
+        <HttpRequestStepEditor
+          stepCid={step.cid}
+          config={cfg}
+          onPatchConfig={set}
+        />
       )
     case "wait_for_reply":
       return (
