@@ -12,6 +12,15 @@ import {
   logWebhookRawJson,
 } from '@/lib/whatsapp/webhook-logger'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
+import {
+  getActiveFlowSession,
+  tryResumeAutomationFlow,
+} from '@/lib/automations/conversation-flow'
+import {
+  handleBookingConversationMessage,
+  isBookPickupIntent,
+  startBookPickupConversation,
+} from '@/lib/automations/pickup-booking-flow'
 import { isValidStatusTransition } from '@/lib/whatsapp/status-transitions'
 import { applyMetaStatusToNotificationLog } from '@/lib/notifications/notification-log'
 import { runInboundAiAgent } from '@/lib/ai/agent-runner'
@@ -42,6 +51,11 @@ interface WhatsAppMessage {
   sticker?: { id: string; mime_type: string }
   location?: { latitude: number; longitude: number; name?: string; address?: string }
   reaction?: { message_id: string; emoji: string }
+  interactive?: {
+    type: 'button_reply' | 'list_reply'
+    button_reply?: { id: string; title: string }
+    list_reply?: { id: string; title: string; description?: string }
+  }
   /** Present when the customer swipe-replies to one of our messages. */
   context?: { id: string }
 }
@@ -659,29 +673,90 @@ async function processMessage(
   // listens to only one trigger runs only when that trigger matches.
   if (contactOutcome.wasCreated) automationTriggers.unshift('new_contact_created')
   if (isFirstInboundMessage) automationTriggers.unshift('first_inbound_message')
-  await Promise.all(
-    automationTriggers.map((triggerType) =>
-      runAutomationsForTrigger({
-        userId,
-        triggerType,
-        contactId: contactRecord.id,
-        context: {
-          message_text: inboundText,
-          conversation_id: conversation.id,
-        },
-      }),
-    ),
-  )
+  const automationContext = {
+    message_text: inboundText,
+    conversation_id: conversation.id,
+    button_id: extractButtonId(message),
+  }
 
-  // AI agent (if enabled for this account) — after DB + automations
-  runInboundAiAgent({
+  const bookingCtx = {
     userId,
-    conversationId: conversation.id,
     contactId: contactRecord.id,
-    inboundText,
-    inboundMessageId: message.id,
-    contentType,
-  }).catch((err) => console.error('[ai-agent] dispatch failed:', err))
+    conversationId: conversation.id,
+    messageText: inboundText,
+    contactName: contactRecord.name ?? contactName,
+    contactPhone: contactRecord.phone,
+  }
+
+  let flowHandled = await tryResumeAutomationFlow({
+    userId,
+    contactId: contactRecord.id,
+    conversationId: conversation.id,
+    messageText: inboundText,
+    contact: {
+      name: contactRecord.name ?? contactName,
+      phone: contactRecord.phone,
+      email: contactRecord.email ?? null,
+    },
+  })
+
+  if (!flowHandled) {
+    await Promise.all(
+      automationTriggers.map((triggerType) =>
+        runAutomationsForTrigger({
+          userId,
+          triggerType,
+          contactId: contactRecord.id,
+          context: automationContext,
+        }),
+      ),
+    )
+    const activeFlow = await getActiveFlowSession(userId, contactRecord.id)
+    if (activeFlow) flowHandled = true
+  }
+
+  if (!flowHandled) {
+    flowHandled = await handleBookingConversationMessage(bookingCtx)
+  }
+
+  if (!flowHandled && isBookPickupIntent(inboundText)) {
+    await startBookPickupConversation(bookingCtx)
+    flowHandled = true
+  }
+
+  if (!flowHandled) {
+    runInboundAiAgent({
+      userId,
+      conversationId: conversation.id,
+      contactId: contactRecord.id,
+      inboundText,
+      inboundMessageId: message.id,
+      contentType,
+    }).catch((err) => console.error('[ai-agent] dispatch failed:', err))
+  }
+}
+
+function extractInteractiveText(message: WhatsAppMessage): string | null {
+  const interactive = message.interactive
+  if (!interactive) return null
+  if (interactive.type === 'button_reply' && interactive.button_reply) {
+    return interactive.button_reply.title || interactive.button_reply.id
+  }
+  if (interactive.type === 'list_reply' && interactive.list_reply) {
+    return interactive.list_reply.title || interactive.list_reply.id
+  }
+  return null
+}
+
+function extractButtonId(message: WhatsAppMessage): string | undefined {
+  const interactive = message.interactive
+  if (interactive?.type === 'button_reply' && interactive.button_reply?.id) {
+    return interactive.button_reply.id
+  }
+  if (interactive?.type === 'list_reply' && interactive.list_reply?.id) {
+    return interactive.list_reply.id
+  }
+  return undefined
 }
 
 async function parseMessageContent(
@@ -715,6 +790,13 @@ async function parseMessageContent(
     case 'text':
       return {
         contentText: message.text?.body || null,
+        mediaUrl: null,
+        mediaType: null,
+      }
+
+    case 'interactive':
+      return {
+        contentText: extractInteractiveText(message),
         mediaUrl: null,
         mediaType: null,
       }

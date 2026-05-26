@@ -251,6 +251,9 @@ export type AutomationStepType =
   | 'wait'
   | 'condition'
   | 'send_webhook'
+  | 'http_request'
+  | 'wait_for_reply'
+  | 'start_pickup_booking'
   | 'close_conversation';
 
 export type AutomationLogStatus = 'success' | 'partial' | 'failed';
@@ -318,7 +321,9 @@ export type ConditionSubject =
   | 'contact_field'
   | 'tag_presence'
   | 'message_content'
-  | 'time_of_day';
+  | 'time_of_day'
+  | 'variable_truthy'
+  | 'variable_equals';
 
 export interface ConditionStepConfig {
   subject: ConditionSubject;
@@ -330,8 +335,23 @@ export interface ConditionStepConfig {
 
 export interface SendWebhookStepConfig {
   url: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH';
   headers?: Record<string, string>;
   body_template?: string;
+}
+
+export interface HttpRequestStepConfig {
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH';
+  url: string;
+  headers?: Record<string, string>;
+  body_template?: string;
+  /** Store JSON response under context.vars[store_as] */
+  store_as: string;
+}
+
+export interface WaitForReplyStepConfig {
+  /** On the customer's next message, save text to vars[this name] */
+  save_reply_to?: string;
 }
 
 export type AutomationStepConfig =
@@ -344,6 +364,8 @@ export type AutomationStepConfig =
   | WaitStepConfig
   | ConditionStepConfig
   | SendWebhookStepConfig
+  | HttpRequestStepConfig
+  | WaitForReplyStepConfig
   | Record<string, never>
   | Record<string, unknown>;
 

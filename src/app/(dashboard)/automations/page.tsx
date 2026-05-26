@@ -16,6 +16,7 @@ import {
   Users,
   PhoneCall,
   Loader2,
+  Package,
 } from "lucide-react"
 
 import { createClient } from "@/lib/supabase/client"
@@ -37,18 +38,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { AUTOMATION_TEMPLATES, type TemplateSlug } from "@/lib/automations/templates"
+import { AUTOMATION_TEMPLATES, TEMPLATE_SLUGS, type TemplateSlug } from "@/lib/automations/templates"
 import { triggerMeta, formatRelative } from "@/lib/automations/trigger-meta"
 import { cn } from "@/lib/utils"
 
-const TEMPLATE_ORDER: TemplateSlug[] = [
-  "welcome_message",
-  "out_of_office",
-  "lead_qualifier",
-  "follow_up_reminder",
-]
-
 const TEMPLATE_ICON: Record<TemplateSlug, typeof Zap> = {
+  pickup_booking: Package,
   welcome_message: MessageCircle,
   out_of_office: Clock,
   lead_qualifier: Users,
@@ -151,8 +146,6 @@ export default function AutomationsPage() {
     )
   }
 
-  const showTemplates = automations.length < 3
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -171,30 +164,32 @@ export default function AutomationsPage() {
         </Button>
       </div>
 
-      {showTemplates && (
-        <section>
-          <h2 className="mb-3 text-sm font-semibold text-slate-300">Quick-start templates</h2>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {TEMPLATE_ORDER.map((slug) => {
-              const t = AUTOMATION_TEMPLATES[slug]
-              const Icon = TEMPLATE_ICON[slug]
-              return (
-                <button
-                  key={slug}
-                  onClick={() => startFromTemplate(slug)}
-                  className="group flex flex-col items-start rounded-xl border border-slate-800 bg-slate-900 p-4 text-left transition-colors hover:border-violet-500/50 hover:bg-slate-900/80"
-                >
-                  <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-violet-500/10 text-violet-400 group-hover:bg-violet-500/15">
-                    <Icon className="h-5 w-5" />
-                  </div>
-                  <div className="text-sm font-semibold text-white">{t.name}</div>
-                  <p className="mt-1 text-xs text-slate-400">{t.description}</p>
-                </button>
-              )
-            })}
-          </div>
-        </section>
-      )}
+      <section>
+        <h2 className="mb-1 text-sm font-semibold text-slate-300">Workflow templates</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          Start from a template, then edit every step, message, and API URL in the builder.
+        </p>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {TEMPLATE_SLUGS.map((slug) => {
+            const t = AUTOMATION_TEMPLATES[slug]
+            const Icon = TEMPLATE_ICON[slug]
+            return (
+              <button
+                key={slug}
+                type="button"
+                onClick={() => startFromTemplate(slug)}
+                className="group flex flex-col items-start rounded-xl border border-slate-800 bg-slate-900 p-4 text-left transition-colors hover:border-violet-500/50 hover:bg-slate-900/80"
+              >
+                <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-violet-500/10 text-violet-400 group-hover:bg-violet-500/15">
+                  <Icon className="h-5 w-5" />
+                </div>
+                <div className="text-sm font-semibold text-white">{t.name}</div>
+                <p className="mt-1 text-xs text-slate-400">{t.description}</p>
+              </button>
+            )
+          })}
+        </div>
+      </section>
 
       {automations.length === 0 ? (
         <div className="flex h-48 flex-col items-center justify-center rounded-xl border border-dashed border-slate-800 bg-slate-900/40">

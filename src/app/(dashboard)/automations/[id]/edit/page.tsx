@@ -1,7 +1,7 @@
 "use client"
 
 import { use, useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { Loader2 } from "lucide-react"
 
 import {
@@ -19,6 +19,8 @@ export default function EditAutomationPage({
 }) {
   const { id } = use(params)
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const applyTemplate = searchParams.get("template") as "pickup_booking" | null
   const [initial, setInitial] = useState<BuilderInitial | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -32,21 +34,39 @@ export default function EditAutomationPage({
       }
       const body = await res.json()
       if (cancelled) return
+      let steps = fromServerSteps((body.steps ?? []) as ServerStepNode[])
+      let trigger_type = body.automation.trigger_type as AutomationTriggerType
+      let trigger_config = body.automation.trigger_config ?? {}
+      let description = body.automation.description ?? ""
+
+      if (applyTemplate === "pickup_booking") {
+        const { buildInitialFromTemplate } = await import("@/lib/automations/templates")
+        const built = buildInitialFromTemplate("pickup_booking")
+        steps = built.steps as typeof steps
+        trigger_type = built.trigger_type
+        trigger_config = built.trigger_config
+        if (!description) description = built.description
+      }
+
       setInitial({
         id: body.automation.id,
         name: body.automation.name ?? "",
-        description: body.automation.description ?? "",
-        trigger_type: body.automation.trigger_type as AutomationTriggerType,
-        trigger_config: body.automation.trigger_config ?? {},
+        description,
+        trigger_type,
+        trigger_config,
         is_active: !!body.automation.is_active,
-        steps: fromServerSteps((body.steps ?? []) as ServerStepNode[]),
+        steps,
       })
+
+      if (applyTemplate === "pickup_booking") {
+        router.replace(`/automations/${id}/edit`)
+      }
     }
     load()
     return () => {
       cancelled = true
     }
-  }, [id])
+  }, [id, applyTemplate, router])
 
   if (error) {
     return (

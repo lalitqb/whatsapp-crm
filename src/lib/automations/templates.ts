@@ -10,6 +10,7 @@ export type TemplateSlug =
   | 'out_of_office'
   | 'lead_qualifier'
   | 'follow_up_reminder'
+  | 'pickup_booking'
 
 export interface TemplateStepSeed {
   step_type: AutomationStepType
@@ -28,16 +29,32 @@ export interface AutomationTemplateDefinition {
   steps: TemplateStepSeed[]
 }
 
+/** Placeholder API config — users replace URLs and keys in each HTTP Request block. */
+const PLACEHOLDER_API_HEADERS = { 'X-Api-Key': 'YOUR_API_KEY' } as const
+
+const EXISTING_BOOKING_BODY = `{
+  "name": "{{vars.customer_name}}",
+  "locality": "{{vars.customer_locality}}",
+  "pickupAddress": "{{vars.customer_address}}",
+  "date": "{{vars.pickup_date}}",
+  "timeSlot": "{{vars.pickup_slot}}",
+  "phonePrimary": "{{contact.phone_primary}}"
+}`
+
+const NEW_BOOKING_BODY = `{
+  "name": "{{vars.pickup_name}}",
+  "locality": "{{vars.pickup_address}}",
+  "pickupAddress": "{{vars.pickup_address}}",
+  "date": "{{vars.pickup_date}}",
+  "timeSlot": "{{vars.pickup_slot}}",
+  "phonePrimary": "{{contact.phone_primary}}"
+}`
+
 export const AUTOMATION_TEMPLATES: Record<TemplateSlug, AutomationTemplateDefinition> = {
   welcome_message: {
     slug: 'welcome_message',
     name: 'Welcome Message',
     description: 'Auto-reply to first-time contacts with a greeting.',
-    // first_inbound_message (added in PR #33) catches both brand-new
-    // contacts AND manually-added/imported contacts on their first-ever
-    // reply, which is what a user setting up a "welcome" automation
-    // almost always wants. new_contact_created would miss the
-    // manually-imported case.
     trigger_type: 'first_inbound_message',
     trigger_config: {},
     steps: [
@@ -125,8 +142,221 @@ export const AUTOMATION_TEMPLATES: Record<TemplateSlug, AutomationTemplateDefini
       },
     ],
   },
+  pickup_booking: {
+    slug: 'pickup_booking',
+    name: 'Pickup booking (step-by-step)',
+    description:
+      'Look up customer by phone, branch existing vs new customer, collect replies one at a time, then call your booking API. Every message and URL is editable.',
+    trigger_type: 'keyword_match',
+    trigger_config: {
+      keywords: [],
+      match_type: 'contains',
+    },
+    steps: [
+      {
+        step_type: 'http_request',
+        step_config: {
+          method: 'GET',
+          url: 'https://api.example.com/bookings/customer?phone={{contact.phone_primary}}',
+          headers: { ...PLACEHOLDER_API_HEADERS },
+          store_as: 'customer_lookup',
+        },
+      },
+      {
+        step_type: 'condition',
+        step_config: { subject: 'variable_truthy', operand: 'customer_found' },
+      },
+      {
+        step_type: 'send_message',
+        step_config: {
+          text: 'Hi {{vars.customer_name}}! When would you like your pickup? Send the date as *YYYY-MM-DD*.',
+        },
+        parent_index: 1,
+        branch: 'yes',
+      },
+      {
+        step_type: 'wait_for_reply',
+        step_config: { save_reply_to: 'pickup_date' },
+        parent_index: 1,
+        branch: 'yes',
+      },
+      {
+        step_type: 'send_message',
+        step_config: {
+          text: 'Which *time slot* works for you? (e.g. 11-1)',
+        },
+        parent_index: 1,
+        branch: 'yes',
+      },
+      {
+        step_type: 'wait_for_reply',
+        step_config: { save_reply_to: 'pickup_slot' },
+        parent_index: 1,
+        branch: 'yes',
+      },
+      {
+        step_type: 'http_request',
+        step_config: {
+          method: 'POST',
+          url: 'https://api.example.com/bookings',
+          headers: { ...PLACEHOLDER_API_HEADERS, 'Content-Type': 'application/json' },
+          body_template: EXISTING_BOOKING_BODY,
+          store_as: 'booking_result',
+        },
+        parent_index: 1,
+        branch: 'yes',
+      },
+      {
+        step_type: 'send_message',
+        step_config: {
+          text: '✅ Pickup booked for *{{vars.pickup_date}}* ({{vars.pickup_slot}}). We will confirm on WhatsApp.',
+        },
+        parent_index: 1,
+        branch: 'yes',
+      },
+      {
+        step_type: 'send_message',
+        step_config: {
+          text: "Welcome! Let's book your first pickup. What is your *full name*?",
+        },
+        parent_index: 1,
+        branch: 'no',
+      },
+      {
+        step_type: 'wait_for_reply',
+        step_config: { save_reply_to: 'pickup_name' },
+        parent_index: 1,
+        branch: 'no',
+      },
+      {
+        step_type: 'send_message',
+        step_config: {
+          text: 'Please send your full *pickup address* (include area/city).',
+        },
+        parent_index: 1,
+        branch: 'no',
+      },
+      {
+        step_type: 'wait_for_reply',
+        step_config: { save_reply_to: 'pickup_address' },
+        parent_index: 1,
+        branch: 'no',
+      },
+      {
+        step_type: 'send_message',
+        step_config: {
+          text: 'When would you like pickup? Send the date as *YYYY-MM-DD*.',
+        },
+        parent_index: 1,
+        branch: 'no',
+      },
+      {
+        step_type: 'wait_for_reply',
+        step_config: { save_reply_to: 'pickup_date' },
+        parent_index: 1,
+        branch: 'no',
+      },
+      {
+        step_type: 'send_message',
+        step_config: {
+          text: 'Which *time slot* works for you?',
+        },
+        parent_index: 1,
+        branch: 'no',
+      },
+      {
+        step_type: 'wait_for_reply',
+        step_config: { save_reply_to: 'pickup_slot' },
+        parent_index: 1,
+        branch: 'no',
+      },
+      {
+        step_type: 'http_request',
+        step_config: {
+          method: 'POST',
+          url: 'https://api.example.com/bookings',
+          headers: { ...PLACEHOLDER_API_HEADERS, 'Content-Type': 'application/json' },
+          body_template: NEW_BOOKING_BODY,
+          store_as: 'booking_result',
+        },
+        parent_index: 1,
+        branch: 'no',
+      },
+      {
+        step_type: 'send_message',
+        step_config: {
+          text: '✅ Pickup booked for *{{vars.pickup_date}}* ({{vars.pickup_slot}}). We will confirm on WhatsApp.',
+        },
+        parent_index: 1,
+        branch: 'no',
+      },
+    ],
+  },
 }
+
+export const TEMPLATE_SLUGS: TemplateSlug[] = [
+  'pickup_booking',
+  'welcome_message',
+  'out_of_office',
+  'lead_qualifier',
+  'follow_up_reminder',
+]
 
 export function getTemplate(slug: string): AutomationTemplateDefinition | null {
   return AUTOMATION_TEMPLATES[slug as TemplateSlug] ?? null
+}
+
+/** Builder-local step shape (cid assigned here). */
+export interface BuilderStepFromTemplate {
+  cid: string
+  step_type: AutomationStepType
+  step_config: Record<string, unknown>
+  branches?: { yes: BuilderStepFromTemplate[]; no: BuilderStepFromTemplate[] }
+}
+
+function newCid(): string {
+  return (
+    'c_' +
+    (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2) + Date.now().toString(36))
+  )
+}
+
+/** Expand flat template seeds into the nested tree the automation builder uses. */
+export function expandTemplateSteps(seeds: TemplateStepSeed[]): BuilderStepFromTemplate[] {
+  const nodes: BuilderStepFromTemplate[] = seeds.map((r) => ({
+    cid: newCid(),
+    step_type: r.step_type,
+    step_config: (r.step_config ?? {}) as Record<string, unknown>,
+    branches: r.step_type === 'condition' ? { yes: [], no: [] } : undefined,
+  }))
+  const roots: BuilderStepFromTemplate[] = []
+  seeds.forEach((r, i) => {
+    if (r.parent_index == null) {
+      roots.push(nodes[i])
+      return
+    }
+    const parent = nodes[r.parent_index]
+    if (!parent.branches) parent.branches = { yes: [], no: [] }
+    parent.branches[r.branch ?? 'yes'].push(nodes[i])
+  })
+  return roots
+}
+
+export function buildInitialFromTemplate(slug: TemplateSlug): {
+  name: string
+  description: string
+  trigger_type: AutomationTriggerType
+  trigger_config: Record<string, unknown>
+  steps: BuilderStepFromTemplate[]
+} {
+  const t = AUTOMATION_TEMPLATES[slug]
+  return {
+    name: t.name,
+    description: t.description,
+    trigger_type: t.trigger_type,
+    trigger_config: t.trigger_config as Record<string, unknown>,
+    steps: expandTemplateSteps(t.steps),
+  }
 }

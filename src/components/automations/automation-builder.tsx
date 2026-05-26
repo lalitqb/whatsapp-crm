@@ -24,6 +24,9 @@ import {
   Loader2,
   ArrowDown,
   ArrowUp,
+  Package,
+  Globe,
+  MessageCircleReply,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -47,6 +50,12 @@ import {
   normalizeKeywordMatchConfigRecord,
   parseKeywordsInput,
 } from "@/lib/automations/trigger-config"
+import {
+  AUTOMATION_TEMPLATES,
+  buildInitialFromTemplate,
+  TEMPLATE_SLUGS,
+  type TemplateSlug,
+} from "@/lib/automations/templates"
 
 // ------------------------------------------------------------
 // Types (builder-local — mirror the flattened rows we POST)
@@ -92,21 +101,56 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
   wait: { label: "Wait", icon: Hourglass, border: "border-l-slate-500" },
   condition: { label: "Condition (If/Else)", icon: GitBranch, border: "border-l-amber-500" },
   send_webhook: { label: "Send Webhook", icon: Webhook, border: "border-l-violet-500" },
+  http_request: { label: "HTTP Request", icon: Globe, border: "border-l-sky-500" },
+  wait_for_reply: {
+    label: "Wait for Reply",
+    icon: MessageCircleReply,
+    border: "border-l-cyan-500",
+  },
+  start_pickup_booking: {
+    label: "Start Pickup Booking",
+    icon: Package,
+    border: "border-l-emerald-500",
+  },
   close_conversation: { label: "Close Conversation", icon: CircleSlash, border: "border-l-violet-500" },
 }
 
-const ADDABLE_STEPS: AutomationStepType[] = [
-  "send_message",
-  "send_template",
-  "add_tag",
-  "remove_tag",
-  "assign_conversation",
-  "update_contact_field",
-  "create_deal",
-  "wait",
-  "condition",
-  "send_webhook",
-  "close_conversation",
+const DEFAULT_STEP_META: StepMeta = {
+  label: "Unknown step",
+  icon: MessageSquare,
+  border: "border-l-slate-500",
+}
+
+function getStepMeta(stepType: string): StepMeta {
+  return STEP_META[stepType as AutomationStepType] ?? {
+    ...DEFAULT_STEP_META,
+    label: stepType.replace(/_/g, " "),
+  }
+}
+
+const STEP_GROUPS: { label: string; types: AutomationStepType[] }[] = [
+  {
+    label: "Messages",
+    types: ["send_message", "send_template"],
+  },
+  {
+    label: "Conversation",
+    types: ["wait_for_reply", "wait", "condition", "close_conversation"],
+  },
+  {
+    label: "CRM",
+    types: [
+      "add_tag",
+      "remove_tag",
+      "assign_conversation",
+      "update_contact_field",
+      "create_deal",
+    ],
+  },
+  {
+    label: "API & webhooks",
+    types: ["http_request", "send_webhook"],
+  },
 ]
 
 const TRIGGER_OPTIONS: { value: AutomationTriggerType; label: string; hint: string }[] = [
@@ -152,7 +196,17 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
     case "condition":
       return { subject: "tag_presence", operand: "", value: "" }
     case "send_webhook":
-      return { url: "", headers: {}, body_template: "" }
+      return { url: "", method: "POST", headers: {}, body_template: "" }
+    case "http_request":
+      return {
+        method: "GET",
+        url: "",
+        headers: {},
+        body_template: "",
+        store_as: "api_response",
+      }
+    case "wait_for_reply":
+      return { save_reply_to: "" }
     case "close_conversation":
       return {}
     default:
@@ -201,6 +255,31 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
   function moveStepAt(path: StepPath, direction: -1 | 1) {
     setState((s) => ({ ...s, steps: moveAt(s.steps, path, direction) }))
   }
+
+  function loadWorkflowTemplate(slug: TemplateSlug) {
+    const t = AUTOMATION_TEMPLATES[slug]
+    const hasSteps = state.steps.length > 0
+    if (
+      hasSteps &&
+      !window.confirm(
+        `Replace current steps with "${t.name}"? Trigger settings will update too. This cannot be undone until you save.`,
+      )
+    ) {
+      return
+    }
+    const built = buildInitialFromTemplate(slug)
+    setState((s) => ({
+      ...s,
+      name: s.name.trim() ? s.name : built.name,
+      description: s.description.trim() ? s.description : built.description,
+      trigger_type: built.trigger_type,
+      trigger_config: built.trigger_config,
+      steps: built.steps as BuilderStep[],
+    }))
+    toast.success(`Loaded "${t.name}" — edit URLs, messages, and keywords, then Save.`)
+  }
+
+  const usesLegacyPickupBlock = hasLegacyPickupStep(state.steps)
 
   async function save() {
     setSaving(true)
@@ -277,6 +356,28 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
           placeholder="Untitled automation"
           className="min-w-0 flex-1 rounded-md bg-transparent px-2 py-1 text-sm font-semibold text-white placeholder:text-slate-500 focus:bg-slate-800 focus:outline-none sm:text-base"
         />
+        <DropdownMenu>
+          <DropdownMenuTrigger className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-700 bg-slate-800 px-2.5 text-xs text-slate-200 hover:bg-slate-700">
+            Templates
+            <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="max-h-80 min-w-64 overflow-y-auto border-slate-700 bg-slate-900"
+          >
+            {TEMPLATE_SLUGS.map((slug) => {
+              const t = AUTOMATION_TEMPLATES[slug]
+              return (
+                <DropdownMenuItem key={slug} onClick={() => loadWorkflowTemplate(slug)}>
+                  <div>
+                    <div className="font-medium text-white">{t.name}</div>
+                    <div className="text-[11px] text-slate-400">{t.description}</div>
+                  </div>
+                </DropdownMenuItem>
+              )
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <div className="flex items-center gap-2 text-xs text-slate-400">
           <span className="hidden sm:inline">Active</span>
           <Switch
@@ -298,7 +399,25 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
       {/* Canvas */}
       <div className="relative flex-1 overflow-y-auto">
         <div className="absolute inset-0 bg-[radial-gradient(circle,#1e293b_1px,transparent_1px)] [background-size:20px_20px] pointer-events-none" />
-        <div className="relative mx-auto flex max-w-2xl flex-col items-center gap-0 px-4 py-10">
+        <div className="relative mx-auto flex w-full max-w-6xl flex-col items-center gap-0 px-4 py-10">
+          {usesLegacyPickupBlock && (
+            <div className="z-10 mb-4 w-full max-w-[400px] rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+              <p className="font-medium">Legacy single-step pickup action</p>
+              <p className="mt-1 text-xs text-amber-200/90">
+                This automation uses one bundled block. Load the{" "}
+                <strong>Pickup booking (step-by-step)</strong> template to get separate
+                blocks for each message, wait step, condition, and HTTP call — all editable.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                className="mt-3 bg-amber-600 text-white hover:bg-amber-700"
+                onClick={() => loadWorkflowTemplate("pickup_booking")}
+              >
+                Load pickup booking template
+              </Button>
+            </div>
+          )}
           <TriggerCard
             type={state.trigger_type}
             config={state.trigger_config}
@@ -547,6 +666,7 @@ interface StepListProps {
 
 function StepList(props: StepListProps) {
   const { steps, parentPath, ...rest } = props
+  const inBranch = parentPath.some((p) => p.kind === "branch")
   const parentScope: ParentScope =
     parentPath.length === 0
       ? { kind: "root" }
@@ -557,7 +677,12 @@ function StepList(props: StepListProps) {
         })()
 
   return (
-    <div className="flex flex-col items-center">
+    <div
+      className={cn(
+        "flex w-full flex-col",
+        inBranch ? "min-w-0 items-stretch" : "items-center",
+      )}
+    >
       <AddButton onPick={(t) => props.addStepAt(parentScope, 0, t)} />
       {steps.map((step, idx) => (
         <StepRenderer
@@ -594,20 +719,28 @@ function StepRenderer({
       ? { kind: "root", index }
       : { kind: "branch", parentCid: parentScope.parentCid, branch: parentScope.branch, index },
   ]
-  const meta = STEP_META[step.step_type]
+  const meta = getStepMeta(step.step_type)
   const Icon = meta.icon
   const expanded = props.expandedId === step.cid
   const isCondition = step.step_type === "condition"
-  // Card widths on mobile fill the full canvas column (max-w-2xl px-4
-  // still keeps them reasonable). On sm+ the original fixed widths
-  // come back so the flow visual stays recognisable.
-  const width = isCondition
-    ? "w-full max-w-[400px] sm:w-[400px]"
-    : "w-full max-w-[320px] sm:w-80"
+  const inBranch = parentPath.some((p) => p.kind === "branch")
+  const hasBranches =
+    isCondition &&
+    ((step.branches?.yes?.length ?? 0) > 0 || (step.branches?.no?.length ?? 0) > 0)
+
+  // Fixed 320px cards inside a 2-column condition grid caused horizontal overlap.
+  // Branch steps use full column width; root condition with branches spans wider.
+  const width = inBranch
+    ? "w-full min-w-0 max-w-full"
+    : isCondition
+      ? hasBranches
+        ? "w-full max-w-5xl"
+        : "w-full max-w-[400px] sm:w-[400px]"
+      : "w-full max-w-[320px] sm:w-80"
 
   return (
     <>
-      <div className={cn("z-10 flex flex-col", width)}>
+      <div className={cn("z-10 flex min-w-0 flex-col", width)}>
         <div
           className={cn(
             "rounded-lg border border-slate-800 border-l-4 bg-slate-900 shadow-lg",
@@ -625,7 +758,13 @@ function StepRenderer({
             </div>
             <div className="min-w-0 flex-1">
               <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                {isCondition ? "Condition" : step.step_type === "wait" ? "Wait" : "Action"}
+                {isCondition
+                  ? "Condition"
+                  : step.step_type === "wait"
+                  ? "Wait"
+                  : step.step_type === "wait_for_reply"
+                  ? "Wait for reply"
+                  : "Action"}
               </div>
               <div className="truncate text-sm font-medium text-white">{meta.label}</div>
               <div className="truncate text-[11px] text-slate-500">{previewFor(step)}</div>
@@ -707,11 +846,15 @@ function ConditionBranches({
     ...parentPath,
     { kind: "branch", parentCid: step.cid, branch: "no", index: 0 },
   ]
+  const inBranch = parentPath.some((p) => p.kind === "branch")
+
   return (
-    // Stack Yes/No vertically on mobile — two columns at 375px would
-    // cram each branch to ~170px which is too narrow for the nested
-    // cards. Two-column grid returns on sm+.
-    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+    <div
+      className={cn(
+        "mt-3 grid w-full gap-6",
+        inBranch ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-2",
+      )}
+    >
       <BranchColumn label="Yes" color="text-violet-400">
         <StepList {...props} steps={yes} parentPath={yesPath} />
       </BranchColumn>
@@ -732,8 +875,10 @@ function BranchColumn({
   children: React.ReactNode
 }) {
   return (
-    <div className="flex flex-col items-center">
-      <div className={cn("mb-2 text-[11px] font-semibold uppercase", color)}>{label}</div>
+    <div className="flex min-w-0 w-full flex-col items-stretch">
+      <div className={cn("mb-2 text-center text-[11px] font-semibold uppercase", color)}>
+        {label}
+      </div>
       {children}
     </div>
   )
@@ -754,20 +899,146 @@ function AddButton({ onPick }: { onPick: (t: AutomationStepType) => void }) {
           align="start"
           className="max-h-80 min-w-56 overflow-y-auto border-slate-700 bg-slate-900"
         >
-          {ADDABLE_STEPS.map((t) => {
-            const Icon = STEP_META[t].icon
-            return (
-              <DropdownMenuItem key={t} onClick={() => onPick(t)}>
-                <Icon className="h-4 w-4" />
-                {STEP_META[t].label}
-              </DropdownMenuItem>
-            )
-          })}
+          {STEP_GROUPS.map((group) => (
+            <div key={group.label}>
+              <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                {group.label}
+              </div>
+              {group.types.map((t) => {
+                const stepMeta = getStepMeta(t)
+                const Icon = stepMeta.icon
+                return (
+                  <DropdownMenuItem key={t} onClick={() => onPick(t)}>
+                    <Icon className="h-4 w-4" />
+                    {stepMeta.label}
+                  </DropdownMenuItem>
+                )
+              })}
+            </div>
+          ))}
         </DropdownMenuContent>
       </DropdownMenu>
       <div className="h-4 w-[2px] bg-slate-700" aria-hidden />
     </div>
   )
+}
+
+// ------------------------------------------------------------
+// JSON object fields (headers) — local draft text so typing isn't reset
+// ------------------------------------------------------------
+
+function formatJsonObjectFieldValue(value: unknown): string {
+  if (typeof value === "string") return value
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return JSON.stringify(value, null, 2)
+  }
+  return "{\n}"
+}
+
+function parseJsonObjectFieldValue(
+  text: string,
+): { ok: true; value: Record<string, string> } | { ok: false; error: string } {
+  const trimmed = text.trim()
+  if (!trimmed) return { ok: true, value: {} }
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ok: false, error: "Must be a JSON object, e.g. {\"X-Api-Key\": \"secret\"}" }
+    }
+    return { ok: true, value: parsed as Record<string, string> }
+  } catch {
+    return { ok: false, error: "Invalid JSON — check commas and quotes" }
+  }
+}
+
+function JsonObjectField({
+  label,
+  fieldKey,
+  value,
+  onChange,
+  className,
+}: {
+  label: string
+  /** Changes when switching steps so draft resets. */
+  fieldKey: string
+  value: unknown
+  onChange: (headers: Record<string, string>) => void
+  className?: string
+}) {
+  const [text, setText] = useState(() => formatJsonObjectFieldValue(value))
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setText(formatJsonObjectFieldValue(value))
+    setError(null)
+  }, [fieldKey])
+
+  function commit(): boolean {
+    const result = parseJsonObjectFieldValue(text)
+    if (!result.ok) {
+      setError(result.error)
+      return false
+    }
+    setError(null)
+    onChange(result.value)
+    setText(JSON.stringify(result.value, null, 2))
+    return true
+  }
+
+  return (
+    <FieldBlock label={label}>
+      <Textarea
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value)
+          setError(null)
+        }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            setText(formatJsonObjectFieldValue(value))
+            setError(null)
+          }
+        }}
+        className={cn("min-h-16 bg-slate-800 font-mono text-xs text-white", className)}
+        spellCheck={false}
+      />
+      {error ? (
+        <p className="mt-1 text-[11px] text-red-400">{error}</p>
+      ) : (
+        <p className="mt-1 text-[11px] text-slate-500">Edit freely; changes apply when you click away.</p>
+      )}
+    </FieldBlock>
+  )
+}
+
+/** Parse string headers before save / API. */
+export function normalizeStepConfigForApi(
+  stepType: string,
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  if (stepType !== "http_request" && stepType !== "send_webhook") return config
+  const headers = config.headers
+  if (headers == null) return config
+  if (typeof headers === "object" && !Array.isArray(headers)) return config
+  if (typeof headers === "string") {
+    const result = parseJsonObjectFieldValue(headers)
+    if (result.ok) return { ...config, headers: result.value }
+  }
+  return config
+}
+
+function normalizeStepsForApi(steps: BuilderStep[]): BuilderStep[] {
+  return steps.map((s) => ({
+    ...s,
+    step_config: normalizeStepConfigForApi(s.step_type, s.step_config),
+    branches: s.branches
+      ? {
+          yes: normalizeStepsForApi(s.branches.yes),
+          no: normalizeStepsForApi(s.branches.no),
+        }
+      : undefined,
+  }))
 }
 
 // ------------------------------------------------------------
@@ -946,9 +1217,17 @@ function StepEditor({
               <option value="contact_field">Contact field</option>
               <option value="message_content">Message content</option>
               <option value="time_of_day">Time of day</option>
+              <option value="variable_truthy">Variable is set / true</option>
+              <option value="variable_equals">Variable equals value</option>
             </select>
           </FieldBlock>
-          <FieldBlock label="Operand">
+          <FieldBlock
+            label={
+              cfg.subject === "variable_truthy" || cfg.subject === "variable_equals"
+                ? "Variable name"
+                : "Operand"
+            }
+          >
             <Input
               placeholder={
                 cfg.subject === "time_of_day"
@@ -957,6 +1236,8 @@ function StepEditor({
                   ? "name / email / company"
                   : cfg.subject === "tag_presence"
                   ? "tag id"
+                  : cfg.subject === "variable_truthy" || cfg.subject === "variable_equals"
+                  ? "e.g. customer_found"
                   : ""
               }
               value={(cfg.operand as string) ?? ""}
@@ -964,7 +1245,9 @@ function StepEditor({
               className="bg-slate-800 text-white"
             />
           </FieldBlock>
-          {(cfg.subject === "contact_field" || cfg.subject === "message_content") && (
+          {(cfg.subject === "contact_field" ||
+            cfg.subject === "message_content" ||
+            cfg.subject === "variable_equals") && (
             <FieldBlock label="Value">
               <Input
                 value={(cfg.value as string) ?? ""}
@@ -982,8 +1265,21 @@ function StepEditor({
             <Input
               value={(cfg.url as string) ?? ""}
               onChange={(e) => set({ url: e.target.value })}
+              placeholder="https://api.example.com/hook"
               className="bg-slate-800 text-white"
             />
+          </FieldBlock>
+          <FieldBlock label="Method">
+            <select
+              value={(cfg.method as string) ?? "POST"}
+              onChange={(e) => set({ method: e.target.value })}
+              className="w-full rounded-md border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-white"
+            >
+              <option value="GET">GET</option>
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+              <option value="PATCH">PATCH</option>
+            </select>
           </FieldBlock>
           <FieldBlock label="Body template (JSON)">
             <Textarea
@@ -994,10 +1290,86 @@ function StepEditor({
           </FieldBlock>
         </>
       )
+    case "http_request":
+      return (
+        <>
+          <FieldBlock label="Method">
+            <select
+              value={(cfg.method as string) ?? "GET"}
+              onChange={(e) => set({ method: e.target.value })}
+              className="w-full rounded-md border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-white"
+            >
+              <option value="GET">GET</option>
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+              <option value="PATCH">PATCH</option>
+            </select>
+          </FieldBlock>
+          <FieldBlock label="URL">
+            <Input
+              value={(cfg.url as string) ?? ""}
+              onChange={(e) => set({ url: e.target.value })}
+              placeholder="{{HEXANOVA_BOOKING_API_URL}}/bookings/customer?phone={{contact.phone_primary}}"
+              className="bg-slate-800 font-mono text-xs text-white"
+            />
+          </FieldBlock>
+          <p className="mb-2 text-[11px] text-slate-500">
+            Variables: {"{{contact.phone_primary}}"}, {"{{vars.pickup_date}}"}, etc. Customer
+            lookup URLs containing <code className="text-slate-400">bookings/customer</code> also
+            set <code className="text-slate-400">vars.customer_found</code>.
+          </p>
+          <JsonObjectField
+            label="Headers (JSON object)"
+            fieldKey={`${step.cid}-headers`}
+            value={cfg.headers}
+            onChange={(headers) => set({ headers })}
+          />
+          <FieldBlock label="Body template (POST/PUT)">
+            <Textarea
+              value={(cfg.body_template as string) ?? ""}
+              onChange={(e) => set({ body_template: e.target.value })}
+              className="min-h-24 bg-slate-800 font-mono text-xs text-white"
+            />
+          </FieldBlock>
+          <FieldBlock label="Store response as variable">
+            <Input
+              value={(cfg.store_as as string) ?? ""}
+              onChange={(e) => set({ store_as: e.target.value })}
+              placeholder="customer_lookup"
+              className="bg-slate-800 text-white"
+            />
+          </FieldBlock>
+        </>
+      )
+    case "wait_for_reply":
+      return (
+        <>
+          <FieldBlock label="Save reply to variable">
+            <Input
+              value={(cfg.save_reply_to as string) ?? ""}
+              onChange={(e) => set({ save_reply_to: e.target.value })}
+              placeholder="pickup_date"
+              className="bg-slate-800 text-white"
+            />
+          </FieldBlock>
+          <p className="text-xs text-slate-400">
+            Flow pauses until the customer sends their next message. That text is saved to{" "}
+            <code className="text-slate-300">vars.&lt;name&gt;</code> and following steps run.
+          </p>
+        </>
+      )
     case "close_conversation":
       return (
         <p className="text-xs text-slate-400">
           Sets the conversation status to &quot;closed&quot;. No configuration needed.
+        </p>
+      )
+    case "start_pickup_booking":
+      return (
+        <p className="text-xs text-slate-400">
+          Tags the contact and sends pickup booking instructions. When they reply with
+          Name, Locality, Address, Date, and Slot, the booking is created via your
+          Hexanova API (server env vars).
         </p>
       )
     default:
@@ -1032,6 +1404,17 @@ function previewFor(step: BuilderStep): string {
       return `when ${step.step_config.subject ?? "?"}`
     case "send_webhook":
       return (step.step_config.url as string) || "no url"
+    case "http_request": {
+      const m = (step.step_config.method as string) || "GET"
+      const u = (step.step_config.url as string) || "no url"
+      return `${m} ${u}`
+    }
+    case "wait_for_reply":
+      return step.step_config.save_reply_to
+        ? `→ vars.${step.step_config.save_reply_to}`
+        : "wait for customer"
+    case "start_pickup_booking":
+      return "pickup booking flow"
     default:
       return ""
   }
@@ -1040,6 +1423,15 @@ function previewFor(step: BuilderStep): string {
 // ------------------------------------------------------------
 // Tree mutation helpers
 // ------------------------------------------------------------
+
+function hasLegacyPickupStep(steps: BuilderStep[]): boolean {
+  for (const s of steps) {
+    if (s.step_type === "start_pickup_booking") return true
+    if (s.branches?.yes?.length && hasLegacyPickupStep(s.branches.yes)) return true
+    if (s.branches?.no?.length && hasLegacyPickupStep(s.branches.no)) return true
+  }
+  return false
+}
 
 function insertAt(
   steps: BuilderStep[],
@@ -1215,7 +1607,8 @@ interface ApiStep {
 }
 
 export function toApiSteps(steps: BuilderStep[]): ApiStep[] {
-  return steps.map((s) => ({
+  const normalized = normalizeStepsForApi(steps)
+  return normalized.map((s) => ({
     step_type: s.step_type,
     step_config: s.step_config,
     branches: s.branches

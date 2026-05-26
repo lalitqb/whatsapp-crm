@@ -112,8 +112,43 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
       if (!nonEmpty(c.subject)) {
         issues.push({ path: `${path}.subject`, message: 'condition subject is required' })
       }
-      if (!nonEmpty(c.operand)) {
+      if (
+        c.subject !== 'variable_truthy' &&
+        c.subject !== 'variable_equals' &&
+        !nonEmpty(c.operand)
+      ) {
         issues.push({ path: `${path}.operand`, message: 'condition operand is required' })
+      }
+      if (
+        (c.subject === 'variable_truthy' || c.subject === 'variable_equals') &&
+        !nonEmpty(c.operand)
+      ) {
+        issues.push({ path: `${path}.operand`, message: 'variable name is required' })
+      }
+      if (c.subject === 'variable_equals' && (c.value === undefined || c.value === null)) {
+        issues.push({ path: `${path}.value`, message: 'expected value is required' })
+      }
+      break
+    case 'http_request':
+      if (!nonEmpty(c.url)) {
+        issues.push({ path: `${path}.url`, message: 'URL is required' })
+      }
+      if (!nonEmpty(c.store_as)) {
+        issues.push({ path: `${path}.store_as`, message: 'store_as variable name is required' })
+      }
+      if (
+        c.method &&
+        !['GET', 'POST', 'PUT', 'PATCH'].includes(String(c.method).toUpperCase())
+      ) {
+        issues.push({ path: `${path}.method`, message: 'method must be GET, POST, PUT, or PATCH' })
+      }
+      break
+    case 'wait_for_reply':
+      if (!nonEmpty(c.save_reply_to)) {
+        issues.push({
+          path: `${path}.save_reply_to`,
+          message: 'variable name to store the reply is required',
+        })
       }
       break
     case 'send_webhook':
@@ -134,6 +169,7 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
       }
       break
     case 'close_conversation':
+    case 'start_pickup_booking':
       // No config required.
       break
     default:

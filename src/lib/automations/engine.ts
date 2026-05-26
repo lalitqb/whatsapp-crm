@@ -1,4 +1,6 @@
+import { startPickupBookingFlow } from '@/lib/automations/pickup-booking-flow'
 import { messageMatchesKeywordTrigger } from '@/lib/automations/trigger-config'
+import { normalizeCustomerPayload } from '@/lib/integrations/hexanova-booking'
 import { isWebhookVerbose, logWebhook } from '@/lib/whatsapp/webhook-logger'
 import type {
   Automation,
@@ -9,6 +11,8 @@ import type {
   SendMessageStepConfig,
   SendTemplateStepConfig,
   SendWebhookStepConfig,
+  HttpRequestStepConfig,
+  WaitForReplyStepConfig,
   TagStepConfig,
   UpdateContactFieldStepConfig,
   WaitStepConfig,
@@ -16,6 +20,7 @@ import type {
   AssignConversationStepConfig,
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
+import { getNestedVar, interpolate as interpolateTemplate } from './interpolate'
 import { engineSendText, engineSendTemplate } from './meta-send'
 
 // ------------------------------------------------------------
@@ -33,6 +38,8 @@ export interface AutomationContext {
   tag_id?: string
   /** Agent the conversation was assigned to, for conversation_assigned. */
   agent_id?: string
+  /** Quick-reply / template button id from WhatsApp interactive payload. */
+  button_id?: string
 }
 
 export interface DispatchInput {
@@ -182,7 +189,11 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
     return
   }
 
-  await executeStepsFrom({
+  const contact = input.contactId
+    ? await loadContactForAutomation(automation.user_id, input.contactId)
+    : undefined
+
+  const completed = await executeStepsFrom({
     automation,
     contactId: input.contactId ?? null,
     context: input.context ?? {},
@@ -191,7 +202,10 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
     startPosition: 0,
     logId: log.id,
     triggerEvent: input.triggerType,
+    contact,
   })
+
+  if (!completed) return
 
   // Atomic counter update via the SQL function from migration 007.
   // Doing this with a client-side read-modify-write raced when the
@@ -214,9 +228,39 @@ interface ExecuteArgs {
   startPosition: number
   logId: string | null
   triggerEvent: string
+  contact?: { name?: string | null; phone?: string | null; email?: string | null }
 }
 
-async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
+/** Resume or continue a multi-turn flow from a saved position. Returns true when finished. */
+export async function executeAutomationFromPosition(params: {
+  automation: Automation
+  contactId: string
+  context: AutomationContext
+  parentStepId: string | null
+  branch: 'yes' | 'no' | null
+  startPosition: number
+  logId: string | null
+  contact?: { name?: string | null; phone?: string | null; email?: string | null }
+}): Promise<boolean> {
+  const contact =
+    params.contact ??
+    (await loadContactForAutomation(params.automation.user_id, params.contactId))
+
+  return executeStepsFrom({
+    automation: params.automation,
+    contactId: params.contactId,
+    context: params.context,
+    parentStepId: params.parentStepId,
+    branch: params.branch,
+    startPosition: params.startPosition,
+    logId: params.logId,
+    triggerEvent: 'flow_resume',
+    contact,
+  })
+}
+
+/** @returns true when the scope finished; false when paused (wait / wait_for_reply). */
+async function executeStepsFrom(args: ExecuteArgs): Promise<boolean> {
   const db = supabaseAdmin()
 
   const baseQuery = db
@@ -235,13 +279,13 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
 
   if (stepsErr) {
     await finalizeLog(args.logId, 'failed', stepsErr.message)
-    return
+    return false
   }
   if (!steps || steps.length === 0) {
     if (args.parentStepId === null && args.logId) {
       await finalizeLog(args.logId, 'success', null)
     }
-    return
+    return true
   }
 
   const results: AutomationLogStepResult[] = []
@@ -274,7 +318,63 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
       })
       status = 'partial'
       await appendResults(args.logId, results, status, errorMessage)
-      return
+      return false
+    }
+
+    if (step.step_type === 'wait_for_reply') {
+      const cfg = step.step_config as WaitForReplyStepConfig
+      if (!args.contactId) {
+        status = 'failed'
+        errorMessage = 'wait_for_reply needs a contact'
+        break
+      }
+      try {
+        const conversationId =
+          args.context.conversation_id ?? (await resolveConversationId(args))
+        const vars = { ...(args.context.vars ?? {}) }
+        const { error: sessErr } = await db.from('automation_flow_sessions').upsert(
+          {
+            user_id: args.automation.user_id,
+            contact_id: args.contactId,
+            automation_id: args.automation.id,
+            conversation_id: conversationId,
+            log_id: args.logId,
+            next_parent_step_id: args.parentStepId,
+            next_branch: args.branch,
+            next_position: step.position + 1,
+            pending_reply_var: cfg.save_reply_to?.trim() || null,
+            vars,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id,contact_id,automation_id' },
+        )
+        if (sessErr?.code === '42P01') {
+          throw new Error('automation_flow_sessions table missing — run migration 015')
+        }
+        if (sessErr) throw new Error(sessErr.message)
+        results.push({
+          step_id: step.id,
+          step_type: step.step_type,
+          status: 'success',
+          detail: cfg.save_reply_to
+            ? `waiting for reply → vars.${cfg.save_reply_to}`
+            : 'waiting for reply',
+        })
+        status = 'partial'
+        await appendResults(args.logId, results, status, errorMessage)
+        return false
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        results.push({
+          step_id: step.id,
+          step_type: step.step_type,
+          status: 'failed',
+          detail: msg,
+        })
+        status = 'failed'
+        errorMessage = msg
+        break
+      }
     }
 
     try {
@@ -287,15 +387,21 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
           status: 'success',
           detail: `branch=${taken ? 'yes' : 'no'}`,
         })
-        // Recurse into the chosen branch at position 0 (children use their
-        // own ordering within the branch scope).
-        await executeStepsFrom({
+        const branchDone = await executeStepsFrom({
           ...args,
           parentStepId: step.id,
           branch: taken ? 'yes' : 'no',
           startPosition: 0,
           logId: args.logId,
         })
+        if (!branchDone) {
+          if (args.parentStepId === null) {
+            await appendResults(args.logId, results, 'partial', null)
+          } else {
+            await appendResults(args.logId, results, null, null)
+          }
+          return false
+        }
         continue
       }
 
@@ -322,10 +428,14 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
 
   if (args.parentStepId === null) {
     await appendResults(args.logId, results, status, errorMessage)
+    if (args.logId && status !== 'failed') {
+      await finalizeLog(args.logId, 'success', errorMessage)
+    }
   } else {
-    // Nested branch — just append results; parent scope decides final status.
     await appendResults(args.logId, results, null, errorMessage)
   }
+
+  return status !== 'failed'
 }
 
 async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string> {
@@ -443,14 +553,75 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
     case 'send_webhook': {
       const cfg = step.step_config as SendWebhookStepConfig
       if (!cfg.url) throw new Error('send_webhook needs url')
-      const body = cfg.body_template ? interpolate(cfg.body_template, args) : JSON.stringify(args.context)
-      const res = await fetch(cfg.url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...(cfg.headers ?? {}) },
-        body,
-      })
+      const method = (cfg.method ?? 'POST').toUpperCase()
+      const url = tpl(cfg.url, args)
+      const headers = interpolateHeaders(cfg.headers, args)
+      const init: RequestInit = { method, headers }
+      if (method !== 'GET' && method !== 'HEAD') {
+        init.body = cfg.body_template
+          ? tpl(cfg.body_template, args)
+          : JSON.stringify(args.context)
+        if (!headers['content-type'] && !headers['Content-Type']) {
+          headers['content-type'] = 'application/json'
+        }
+      }
+      const res = await fetch(url, init)
       if (!res.ok) throw new Error(`webhook returned ${res.status}`)
       return `webhook ${res.status}`
+    }
+
+    case 'http_request': {
+      const cfg = step.step_config as HttpRequestStepConfig
+      if (!cfg.url?.trim()) throw new Error('http_request needs url')
+      if (!cfg.store_as?.trim()) throw new Error('http_request needs store_as')
+      const method = (cfg.method ?? 'GET').toUpperCase()
+      const url = tpl(cfg.url, args)
+      const headers = interpolateHeaders(cfg.headers, args)
+      const init: RequestInit = { method, headers }
+      if (method !== 'GET' && method !== 'HEAD') {
+        init.body = cfg.body_template ? tpl(cfg.body_template, args) : undefined
+        if (init.body && !headers['content-type'] && !headers['Content-Type']) {
+          headers['content-type'] = 'application/json'
+        }
+      }
+      const res = await fetch(url, init)
+      const text = await res.text()
+      let data: unknown = text
+      try {
+        data = JSON.parse(text)
+      } catch {
+        // keep raw text
+      }
+      if (!res.ok) {
+        const errMsg =
+          typeof data === 'object' && data !== null && 'message' in data
+            ? String((data as { message: unknown }).message)
+            : text || `HTTP ${res.status}`
+        throw new Error(`http_request ${res.status}: ${errMsg}`)
+      }
+      const vars = { ...(args.context.vars ?? {}) }
+      applyHttpResponseToVars(url, data, vars, cfg.store_as)
+      args.context.vars = vars
+      return `stored in vars.${cfg.store_as}`
+    }
+
+    case 'start_pickup_booking': {
+      if (!args.contactId) throw new Error('start_pickup_booking needs a contact')
+      const conversationId = await resolveConversationId(args)
+      const { data: contact } = await supabaseAdmin()
+        .from('contacts')
+        .select('phone, name')
+        .eq('id', args.contactId)
+        .eq('user_id', args.automation.user_id)
+        .maybeSingle()
+      await startPickupBookingFlow({
+        userId: args.automation.user_id,
+        contactId: args.contactId,
+        conversationId,
+        contactPhone: contact?.phone ?? '',
+        contactName: contact?.name ?? null,
+      })
+      return 'pickup booking flow started'
     }
 
     case 'close_conversation': {
@@ -543,6 +714,22 @@ async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): P
       const t = parse(to)
       return f <= t ? mins >= f && mins < t : mins >= f || mins < t
     }
+    case 'variable_truthy': {
+      const path = (cfg.operand ?? '').trim()
+      if (!path) return false
+      const v =
+        getNestedVar(args.context.vars, path) ??
+        args.context.vars?.[path]
+      return Boolean(v)
+    }
+    case 'variable_equals': {
+      const path = (cfg.operand ?? '').trim()
+      if (!path) return false
+      const v =
+        getNestedVar(args.context.vars, path) ??
+        args.context.vars?.[path]
+      return String(v ?? '') === String(cfg.value ?? '')
+    }
     default:
       return false
   }
@@ -553,13 +740,59 @@ function waitMs(cfg: WaitStepConfig): number {
   return Math.max(1_000, cfg.amount * unitMs)
 }
 
+function tpl(s: string, args: ExecuteArgs): string {
+  return interpolateTemplate(s, args.context, { contact: args.contact })
+}
+
+function interpolateHeaders(
+  headers: Record<string, string> | undefined,
+  args: ExecuteArgs,
+): Record<string, string> {
+  if (!headers) return {}
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(headers)) {
+    out[k] = tpl(v, args)
+  }
+  return out
+}
+
+function applyHttpResponseToVars(
+  url: string,
+  data: unknown,
+  vars: Record<string, unknown>,
+  storeAs: string,
+): void {
+  vars[storeAs] = data
+  if (!url.includes('bookings/customer')) return
+
+  const customer = normalizeCustomerPayload(data)
+  vars.customer_found = Boolean(customer)
+  if (customer) {
+    vars.customer = customer
+    vars.customer_name = customer.name ?? ''
+    vars.customer_locality = customer.locality ?? ''
+    vars.customer_address = customer.pickupAddress ?? ''
+    if (customer.phonePrimary) vars.customer_phone = customer.phonePrimary
+  }
+}
+
+async function loadContactForAutomation(
+  userId: string,
+  contactId: string,
+): Promise<{ name?: string | null; phone?: string | null; email?: string | null } | undefined> {
+  const { data } = await supabaseAdmin()
+    .from('contacts')
+    .select('name, phone, email')
+    .eq('id', contactId)
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (!data) return undefined
+  return { name: data.name, phone: data.phone, email: data.email }
+}
+
+/** Used by send_message and other steps that still call interpolate() */
 function interpolate(s: string, args: ExecuteArgs): string {
-  return s.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => {
-    const [ns, prop] = String(key).split('.')
-    if (ns === 'message' && prop === 'text') return String(args.context.message_text ?? '')
-    if (ns === 'vars' && prop) return String(args.context.vars?.[prop] ?? '')
-    return ''
-  })
+  return tpl(s, args)
 }
 
 async function appendResults(

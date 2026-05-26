@@ -117,6 +117,7 @@ async function callBookingApi(
     'Content-Type': 'application/json',
   }
   if (ctx.bookingApiKey) {
+    headers['X-Api-Key'] = ctx.bookingApiKey
     headers.Authorization = `Bearer ${ctx.bookingApiKey}`
   }
   const res = await fetch(url, {
@@ -187,7 +188,15 @@ export async function executeAgentTool(
     }
 
     if (name === 'create_booking') {
-      const live = await callBookingApi(ctx, '/bookings', 'POST', args)
+      const body = {
+        date: args.pickup_date,
+        locality: args.pincode,
+        name: args.customer_name,
+        phonePrimary: String(args.phone ?? '').replace(/\D/g, '').slice(-10),
+        pickupAddress: args.address,
+        timeSlot: args.pickup_slot,
+      }
+      const live = await callBookingApi(ctx, '/bookings', 'POST', body)
       return JSON.stringify(live ?? mockBooking(args))
     }
 
