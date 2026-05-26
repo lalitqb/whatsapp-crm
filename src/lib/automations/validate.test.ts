@@ -194,13 +194,13 @@ describe("validateTriggerForActivation", () => {
     expect(issues.map((i) => i.path)).toContain("trigger.keywords");
   });
 
-  it("rejects keyword_match with whitespace-only entries", () => {
+  it("rejects keyword_match when keywords are only whitespace", () => {
     const issues = validateTriggerForActivation("keyword_match", {
-      keywords: ["hi", "   "],
+      keywords: ["   ", "  "],
       match_type: "contains",
     });
     expect(issues.map((i) => i.message)).toContain(
-      "keywords cannot be empty strings",
+      "at least one keyword is required",
     );
   });
 

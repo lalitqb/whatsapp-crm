@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import {
@@ -42,6 +42,11 @@ import type {
   KeywordMatchTriggerConfig,
 } from "@/types"
 import { cn } from "@/lib/utils"
+import {
+  normalizeKeywordMatchConfig,
+  normalizeKeywordMatchConfigRecord,
+  parseKeywordsInput,
+} from "@/lib/automations/trigger-config"
 
 // ------------------------------------------------------------
 // Types (builder-local — mirror the flattened rows we POST)
@@ -165,6 +170,8 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
   const [state, setState] = useState<BuilderInitial>(initial)
   const [saving, setSaving] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  /** Flushes keyword trigger text → config before save (if user didn't blur the field). */
+  const flushKeywordConfigRef = useRef<(() => void) | null>(null)
 
   function patchTop<K extends keyof BuilderInitial>(key: K, value: BuilderInitial[K]) {
     setState((s) => ({ ...s, [key]: value }))
@@ -198,11 +205,17 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
   async function save() {
     setSaving(true)
     try {
+      flushKeywordConfigRef.current?.()
+      const trigger_config =
+        state.trigger_type === "keyword_match"
+          ? normalizeKeywordMatchConfig(state.trigger_config)
+          : state.trigger_config
+
       const payload = {
         name: state.name || "Untitled automation",
         description: state.description || null,
         trigger_type: state.trigger_type,
-        trigger_config: state.trigger_config,
+        trigger_config,
         is_active: state.is_active,
         steps: toApiSteps(state.steps),
       }
@@ -289,8 +302,19 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
           <TriggerCard
             type={state.trigger_type}
             config={state.trigger_config}
-            onTypeChange={(t) => patchTop("trigger_type", t)}
+            onTypeChange={(t) => {
+              patchTop("trigger_type", t)
+              if (t === "keyword_match") {
+                patchTop(
+                  "trigger_config",
+                  normalizeKeywordMatchConfigRecord(state.trigger_config),
+                )
+              }
+            }}
             onConfigChange={(c) => patchTop("trigger_config", c)}
+            registerKeywordFlush={(fn) => {
+              flushKeywordConfigRef.current = fn
+            }}
           />
           <StepList
             steps={state.steps}
@@ -317,11 +341,13 @@ function TriggerCard({
   config,
   onTypeChange,
   onConfigChange,
+  registerKeywordFlush,
 }: {
   type: AutomationTriggerType
   config: Record<string, unknown>
   onTypeChange: (t: AutomationTriggerType) => void
   onConfigChange: (c: Record<string, unknown>) => void
+  registerKeywordFlush?: (flush: (() => void) | null) => void
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -372,6 +398,7 @@ function TriggerCard({
               <KeywordMatchConfig
                 config={config as unknown as KeywordMatchTriggerConfig}
                 onChange={onConfigChange}
+                registerFlush={registerKeywordFlush}
               />
             )}
             {type === "tag_added" && (
@@ -404,11 +431,43 @@ function TriggerCard({
 function KeywordMatchConfig({
   config,
   onChange,
+  registerFlush,
 }: {
   config: KeywordMatchTriggerConfig
   onChange: (c: Record<string, unknown>) => void
+  registerFlush?: (flush: (() => void) | null) => void
 }) {
-  const keywords = config?.keywords ?? []
+  const normalized = normalizeKeywordMatchConfig(
+    config as unknown as Record<string, unknown>,
+  )
+  const [keywordText, setKeywordText] = useState(() =>
+    normalized.keywords.join(", "),
+  )
+  const [matchType, setMatchType] = useState<"exact" | "contains">(
+    normalized.match_type,
+  )
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Resync when loading an existing automation from the API (not while typing).
+  useEffect(() => {
+    if (document.activeElement === inputRef.current) return
+    setKeywordText(normalized.keywords.join(", "))
+    setMatchType(normalized.match_type)
+  }, [normalized.keywords.join("\u0001"), normalized.match_type])
+
+  function commit(nextText?: string, nextMatchType?: "exact" | "contains") {
+    const keywords = parseKeywordsInput(nextText ?? keywordText)
+    const mt = nextMatchType ?? matchType
+    onChange({ keywords, match_type: mt })
+    return { keywords, match_type: mt }
+  }
+
+  useEffect(() => {
+    if (!registerFlush) return
+    registerFlush(() => commit())
+    return () => registerFlush(null)
+  })
+
   return (
     <div className="space-y-2">
       <div>
@@ -416,26 +475,42 @@ function KeywordMatchConfig({
           Keywords (comma-separated)
         </label>
         <Input
-          value={keywords.join(", ")}
-          onChange={(e) =>
-            onChange({
-              ...config,
-              keywords: e.target.value
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean),
-            })
-          }
+          ref={inputRef}
+          value={keywordText}
+          onChange={(e) => setKeywordText(e.target.value)}
+          onBlur={() => commit()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault()
+              commit()
+              inputRef.current?.blur()
+            }
+          }}
+          placeholder="pricing, quote, buy"
           className="bg-slate-800 text-white"
         />
+        <p className="mt-1 text-[11px] text-slate-500">
+          Separate with commas. Press Enter or click away to apply.
+          {normalized.keywords.length > 0 && (
+            <span className="text-slate-400">
+              {" "}
+              ({normalized.keywords.length} keyword
+              {normalized.keywords.length === 1 ? "" : "s"} saved)
+            </span>
+          )}
+        </p>
       </div>
       <div>
         <label className="mb-1 block text-xs font-medium text-slate-400">
           Match type
         </label>
         <select
-          value={config?.match_type ?? "contains"}
-          onChange={(e) => onChange({ ...config, match_type: e.target.value as "exact" | "contains" })}
+          value={matchType}
+          onChange={(e) => {
+            const mt = e.target.value as "exact" | "contains"
+            setMatchType(mt)
+            commit(undefined, mt)
+          }}
           className="w-full rounded-md border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-white focus:outline-none"
         >
           <option value="contains">Contains</option>

@@ -1,4 +1,5 @@
 import type { AutomationTriggerType } from '@/types'
+import { normalizeKeywordMatchConfig } from '@/lib/automations/trigger-config'
 
 // ------------------------------------------------------------
 // Pre-flight config validation for automations about to be activated.
@@ -148,17 +149,19 @@ export function validateTriggerForActivation(
   const cfg = (triggerConfig ?? {}) as Record<string, unknown>
 
   if (triggerType === 'keyword_match') {
-    const k = cfg.keywords
-    if (!Array.isArray(k) || k.length === 0) {
-      issues.push({ path: 'trigger.keywords', message: 'at least one keyword is required' })
-    } else if (k.some((v) => typeof v !== 'string' || v.trim() === '')) {
-      issues.push({ path: 'trigger.keywords', message: 'keywords cannot be empty strings' })
-    }
-    if (cfg.match_type !== 'exact' && cfg.match_type !== 'contains') {
+    if (
+      cfg.match_type != null &&
+      cfg.match_type !== 'exact' &&
+      cfg.match_type !== 'contains'
+    ) {
       issues.push({
         path: 'trigger.match_type',
         message: 'match type must be "exact" or "contains"',
       })
+    }
+    const { keywords } = normalizeKeywordMatchConfig(cfg)
+    if (keywords.length === 0) {
+      issues.push({ path: 'trigger.keywords', message: 'at least one keyword is required' })
     }
   } else if (triggerType === 'time_based') {
     if (!nonEmpty(cfg.schedule)) {

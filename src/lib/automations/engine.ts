@@ -1,10 +1,11 @@
+import { messageMatchesKeywordTrigger } from '@/lib/automations/trigger-config'
+import { isWebhookVerbose, logWebhook } from '@/lib/whatsapp/webhook-logger'
 import type {
   Automation,
   AutomationLogStepResult,
   AutomationStep,
   AutomationTriggerType,
   ConditionStepConfig,
-  KeywordMatchTriggerConfig,
   SendMessageStepConfig,
   SendTemplateStepConfig,
   SendWebhookStepConfig,
@@ -62,15 +63,48 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
       console.error('[automations] fetch failed:', error)
       return
     }
-    if (!automations || automations.length === 0) return
+    if (!automations || automations.length === 0) {
+      if (isWebhookVerbose()) {
+        logWebhook('[automations] no active automations for trigger', {
+          triggerType: input.triggerType,
+          userId: input.userId,
+        })
+      }
+      return
+    }
+
+    const verbose = isWebhookVerbose()
+    const skipped: { id: string; name: string; reason: string }[] = []
+    let ran = 0
 
     for (const automation of automations as Automation[]) {
-      if (!triggerMatches(automation, input.context)) continue
+      if (!triggerMatches(automation, input.context)) {
+        if (verbose && automation.trigger_type === 'keyword_match') {
+          skipped.push({
+            id: automation.id,
+            name: automation.name,
+            reason: 'keyword did not match message',
+          })
+        }
+        continue
+      }
       try {
         await executeAutomation(automation, input)
+        ran += 1
       } catch (err) {
         console.error('[automations] execute failed:', automation.id, err)
       }
+    }
+
+    if (verbose) {
+      logWebhook('[automations] dispatch complete', {
+        triggerType: input.triggerType,
+        userId: input.userId,
+        message_text: input.context?.message_text,
+        candidates: automations.length,
+        ran,
+        skipped,
+      })
     }
   } catch (err) {
     console.error('[automations] dispatch failed:', err)
@@ -322,27 +356,13 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       // we MUST emit params in strict numeric order. Lexicographic sort
       // of "1", "2", …, "10" yields "1", "10", "2", … which silently
       // scrambles every template with ≥10 variables.
-      const params = cfg.variables
-        ? Object.keys(cfg.variables)
-            .sort((a, b) => {
-              const na = Number(a)
-              const nb = Number(b)
-              const aNum = Number.isFinite(na)
-              const bNum = Number.isFinite(nb)
-              if (aNum && bNum) return na - nb
-              if (aNum) return -1
-              if (bNum) return 1
-              return a.localeCompare(b)
-            })
-            .map((k) => String(cfg.variables![k]))
-        : []
       const { whatsapp_message_id } = await engineSendTemplate({
         userId: args.automation.user_id,
         conversationId,
         contactId: args.contactId,
         templateName: cfg.template_name,
         language: cfg.language,
-        params,
+        variables: cfg.variables,
       })
       return `template sent via Meta (${whatsapp_message_id})`
     }
@@ -476,15 +496,10 @@ async function resolveConversationId(args: ExecuteArgs): Promise<string> {
 
 function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {
   if (automation.trigger_type !== 'keyword_match') return true
-  const cfg = automation.trigger_config as KeywordMatchTriggerConfig
-  if (!cfg?.keywords || cfg.keywords.length === 0) return false
-  const text = (ctx?.message_text ?? '').toString()
-  if (!text) return false
-  const haystack = cfg.case_sensitive ? text : text.toLowerCase()
-  return cfg.keywords.some((raw) => {
-    const k = cfg.case_sensitive ? raw : raw.toLowerCase()
-    return cfg.match_type === 'exact' ? haystack === k : haystack.includes(k)
-  })
+  return messageMatchesKeywordTrigger(
+    (ctx?.message_text ?? '').toString(),
+    automation.trigger_config as Record<string, unknown>,
+  )
 }
 
 async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): Promise<boolean> {

@@ -6,6 +6,12 @@ import {
   phoneVariants,
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
+import { loadBroadcastTemplateContext } from '@/lib/whatsapp/broadcast-template-send'
+import { normalizeMetaLanguageCode } from '@/lib/whatsapp/template-meta'
+import {
+  broadcastParamsToVariables,
+  buildTemplateSendPlanFromSources,
+} from '@/lib/whatsapp/template-send-plan'
 import { supabaseAdmin } from './admin-client'
 
 // ------------------------------------------------------------
@@ -32,7 +38,10 @@ interface SendTemplateArgs {
   contactId: string
   templateName: string
   language?: string
+  /** Positional values in {{1}}, {{2}} order (legacy). */
   params?: string[]
+  /** Named or positional keys from automation step_config.variables. */
+  variables?: Record<string, string | number>
 }
 
 export async function engineSendText(args: SendTextArgs): Promise<{ whatsapp_message_id: string }> {
@@ -88,13 +97,48 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
 
   const attempt = async (phone: string): Promise<string> => {
     if (input.kind === 'template') {
+      const language = normalizeMetaLanguageCode(input.language ?? 'en_US')
+      const ctx = await loadBroadcastTemplateContext(db, {
+        userId: input.userId,
+        templateName: input.templateName,
+        templateLanguage: language,
+        wabaId: config.waba_id ?? null,
+        accessToken,
+      })
+
+      let variables: Record<string, string> = {}
+      if (input.variables && Object.keys(input.variables).length > 0) {
+        variables = Object.fromEntries(
+          Object.entries(input.variables).map(([k, v]) => [k, String(v)]),
+        )
+      } else if (input.params?.length) {
+        variables = broadcastParamsToVariables(
+          input.params,
+          ctx.bodyText,
+          ctx.meta?.components,
+          ctx.meta?.parameter_format,
+        )
+      }
+
+      const sendPlan = buildTemplateSendPlanFromSources(
+        ctx.meta,
+        { body_text: ctx.bodyText },
+        variables,
+        { headerMedia: ctx.storedHeaderMedia },
+      )
+
       const r = await sendTemplateMessage({
         phoneNumberId: config.phone_number_id,
         accessToken,
         to: phone,
-        templateName: input.templateName,
-        language: input.language,
-        params: input.params,
+        templateName: ctx.templateName,
+        language: ctx.language,
+        bodyParameters: sendPlan.bodyParameters,
+        buttonParameters:
+          sendPlan.buttonParameters.length > 0
+            ? sendPlan.buttonParameters
+            : undefined,
+        headerMedia: sendPlan.headerMedia,
       })
       return r.messageId
     }
