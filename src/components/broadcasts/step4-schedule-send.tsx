@@ -20,6 +20,7 @@ interface AudienceConfig {
   type: string;
   tagIds?: string[];
   csvContacts?: { phone: string; name?: string }[];
+  contactIds?: string[];
 }
 
 interface Step4Props {
@@ -70,6 +71,8 @@ export function Step4ScheduleSend({
           setEstimatedReach(uniqueIds.size);
         } else if (audience.type === 'csv' && audience.csvContacts) {
           setEstimatedReach(audience.csvContacts.length);
+        } else if (audience.type === 'contacts' && audience.contactIds) {
+          setEstimatedReach(new Set(audience.contactIds).size);
         } else {
           setEstimatedReach(0);
         }
@@ -86,6 +89,8 @@ export function Step4ScheduleSend({
       ? 'All Contacts'
       : audience.type === 'tags'
         ? `Tags (${audience.tagIds?.length ?? 0} selected)`
+        : audience.type === 'contacts'
+          ? `Selected Contacts (${audience.contactIds?.length ?? 0})`
         : audience.type === 'csv'
           ? 'CSV Upload'
           : 'Custom';

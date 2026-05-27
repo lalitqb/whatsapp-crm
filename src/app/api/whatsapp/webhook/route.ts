@@ -677,6 +677,7 @@ async function processMessage(
     message_text: inboundText,
     conversation_id: conversation.id,
     button_id: extractButtonId(message),
+    inbound_message_id: message.id,
   }
 
   const bookingCtx = {
@@ -693,6 +694,7 @@ async function processMessage(
     contactId: contactRecord.id,
     conversationId: conversation.id,
     messageText: inboundText,
+    inboundMessageId: message.id,
     contact: {
       name: contactRecord.name ?? contactName,
       phone: contactRecord.phone,

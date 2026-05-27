@@ -85,6 +85,7 @@ export async function tryResumeAutomationFlow(args: {
   contactId: string
   conversationId: string
   messageText: string
+  inboundMessageId?: string
   contact: { name?: string | null; phone?: string | null; email?: string | null }
 }): Promise<boolean> {
   const session = await getActiveFlowSession(args.userId, args.contactId)
@@ -99,6 +100,7 @@ export async function tryResumeAutomationFlow(args: {
   const context: AutomationContext = {
     message_text: args.messageText,
     conversation_id: args.conversationId,
+    inbound_message_id: args.inboundMessageId,
     vars,
   }
 

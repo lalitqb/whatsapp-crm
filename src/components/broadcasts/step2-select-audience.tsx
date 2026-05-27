@@ -9,13 +9,14 @@ import {
   Tags,
   Filter,
   Upload,
+  UserRound,
   Loader2,
   ArrowRight,
   ArrowLeft,
   X,
 } from 'lucide-react';
 
-type AudienceType = 'all' | 'tags' | 'custom_field' | 'csv';
+type AudienceType = 'all' | 'tags' | 'custom_field' | 'csv' | 'contacts';
 type CustomFieldOperator = 'is' | 'is_not' | 'contains';
 
 interface CustomFieldFilter {
@@ -29,6 +30,7 @@ interface AudienceConfig {
   tagIds?: string[];
   customField?: CustomFieldFilter;
   csvContacts?: { phone: string; name?: string }[];
+  contactIds?: string[];
   excludeTagIds?: string[];
 }
 
@@ -64,6 +66,12 @@ const audienceOptions: {
     icon: Filter,
   },
   {
+    type: 'contacts',
+    label: 'Select Contacts',
+    description: 'Choose one or many specific contacts',
+    icon: UserRound,
+  },
+  {
     type: 'csv',
     label: 'Upload CSV',
     description: 'Upload a list of phone numbers',
@@ -87,6 +95,11 @@ export function Step2SelectAudience({
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [loadingTags, setLoadingTags] = useState(false);
   const [loadingFields, setLoadingFields] = useState(false);
+  const [contacts, setContacts] = useState<
+    { id: string; name: string | null; phone: string }[]
+  >([]);
+  const [loadingContacts, setLoadingContacts] = useState(false);
+  const [contactSearch, setContactSearch] = useState('');
   const [estimatedCount, setEstimatedCount] = useState<number | null>(null);
   const [loadingCount, setLoadingCount] = useState(false);
 
@@ -123,6 +136,25 @@ export function Step2SelectAudience({
       }
     }
     fetchFields();
+  }, [audience.type]);
+
+  useEffect(() => {
+    if (audience.type !== 'contacts') return;
+    async function fetchContacts() {
+      setLoadingContacts(true);
+      try {
+        const supabase = createClient();
+        const { data } = await supabase
+          .from('contacts')
+          .select('id, name, phone')
+          .order('created_at', { ascending: false })
+          .limit(500);
+        setContacts(data ?? []);
+      } finally {
+        setLoadingContacts(false);
+      }
+    }
+    fetchContacts();
   }, [audience.type]);
 
   const fetchEstimatedCount = useCallback(async () => {
@@ -167,6 +199,13 @@ export function Step2SelectAudience({
       ) {
         setEstimatedCount(audience.csvContacts.length);
         return;
+      } else if (
+        audience.type === 'contacts' &&
+        audience.contactIds &&
+        audience.contactIds.length > 0
+      ) {
+        setEstimatedCount(new Set(audience.contactIds).size);
+        return;
       } else {
         // Partially-configured audience — wait for the user to finish.
         setEstimatedCount(null);
@@ -204,6 +243,7 @@ export function Step2SelectAudience({
     audience.tagIds,
     audience.customField,
     audience.csvContacts,
+    audience.contactIds,
     audience.excludeTagIds,
   ]);
 
@@ -236,12 +276,23 @@ export function Step2SelectAudience({
     onUpdate({ ...audience, customField: { ...prev, ...patch } });
   }
 
+  function toggleContact(contactId: string) {
+    const current = audience.contactIds ?? [];
+    const updated = current.includes(contactId)
+      ? current.filter((id) => id !== contactId)
+      : [...current, contactId];
+    onUpdate({ ...audience, contactIds: updated });
+  }
+
   const isValid =
     audience.type === 'all' ||
     (audience.type === 'tags' && audience.tagIds && audience.tagIds.length > 0) ||
     (audience.type === 'custom_field' &&
       !!audience.customField?.fieldId &&
       audience.customField.value.length > 0) ||
+    (audience.type === 'contacts' &&
+      audience.contactIds &&
+      audience.contactIds.length > 0) ||
     (audience.type === 'csv' &&
       audience.csvContacts &&
       audience.csvContacts.length > 0);
@@ -275,6 +326,8 @@ export function Step2SelectAudience({
                       : undefined,
                   csvContacts:
                     option.type === 'csv' ? audience.csvContacts : undefined,
+                  contactIds:
+                    option.type === 'contacts' ? audience.contactIds : undefined,
                 })
               }
               className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-all ${
@@ -386,6 +439,60 @@ export function Step2SelectAudience({
               />
             </div>
           )}
+        </div>
+      )}
+
+      {audience.type === 'contacts' && (
+        <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+          <p className="text-sm font-medium text-white">Select Contacts</p>
+          <input
+            type="text"
+            value={contactSearch}
+            onChange={(e) => setContactSearch(e.target.value)}
+            placeholder="Search by name or phone"
+            className="h-9 w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 text-sm text-white outline-none placeholder:text-slate-500 focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
+          />
+          {loadingContacts ? (
+            <Loader2 className="h-5 w-5 animate-spin text-violet-500" />
+          ) : contacts.length === 0 ? (
+            <p className="text-xs text-slate-400">No contacts found.</p>
+          ) : (
+            <div className="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/40 p-2">
+              {contacts
+                .filter((contact) => {
+                  const q = contactSearch.trim().toLowerCase();
+                  if (!q) return true;
+                  return (
+                    (contact.name ?? '').toLowerCase().includes(q) ||
+                    contact.phone.toLowerCase().includes(q)
+                  );
+                })
+                .map((contact) => {
+                  const selected = audience.contactIds?.includes(contact.id);
+                  return (
+                    <button
+                      key={contact.id}
+                      onClick={() => toggleContact(contact.id)}
+                      className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-xs transition-colors ${
+                        selected
+                          ? 'bg-violet-500/10 text-violet-300'
+                          : 'text-slate-300 hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="truncate pr-2">
+                        {(contact.name && contact.name.trim()) || 'Unnamed'} · {contact.phone}
+                      </span>
+                      {selected ? (
+                        <span className="text-[10px] text-violet-300">Selected</span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+            </div>
+          )}
+          <p className="text-xs text-slate-500">
+            {audience.contactIds?.length ?? 0} contact(s) selected
+          </p>
         </div>
       )}
 

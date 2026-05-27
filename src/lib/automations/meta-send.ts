@@ -1,4 +1,8 @@
-import { sendTextMessage, sendTemplateMessage } from '@/lib/whatsapp/meta-api'
+import {
+  sendTextMessage,
+  sendTemplateMessage,
+  sendTypingIndicator,
+} from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
   preparePhoneForMeta,
@@ -30,6 +34,7 @@ interface SendTextArgs {
   conversationId: string
   contactId: string
   text: string
+  inboundMessageId?: string
 }
 
 interface SendTemplateArgs {
@@ -42,6 +47,7 @@ interface SendTemplateArgs {
   params?: string[]
   /** Named or positional keys from automation step_config.variables. */
   variables?: Record<string, string | number>
+  inboundMessageId?: string
 }
 
 export async function engineSendText(args: SendTextArgs): Promise<{ whatsapp_message_id: string }> {
@@ -94,6 +100,19 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
   }
 
   const accessToken = decrypt(config.access_token)
+
+  if (input.inboundMessageId) {
+    try {
+      await sendTypingIndicator({
+        phoneNumberId: config.phone_number_id,
+        accessToken,
+        messageId: input.inboundMessageId,
+      })
+    } catch (err) {
+      // Typing indicator is best-effort; never block the actual automation reply.
+      console.warn('[automations] typing indicator failed:', err)
+    }
+  }
 
   const attempt = async (phone: string): Promise<string> => {
     if (input.kind === 'template') {

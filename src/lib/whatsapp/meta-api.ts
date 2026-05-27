@@ -83,6 +83,40 @@ export interface SendTextMessageArgs {
   contextMessageId?: string
 }
 
+export interface SendTypingIndicatorArgs {
+  phoneNumberId: string
+  accessToken: string
+  /** Incoming customer message ID (wamid...) from webhook payload. */
+  messageId: string
+}
+
+/**
+ * Mark an inbound message as read and show WhatsApp's typing indicator.
+ * Indicator auto-dismisses after ~25s or when a reply is sent.
+ */
+export async function sendTypingIndicator(
+  args: SendTypingIndicatorArgs,
+): Promise<void> {
+  const { phoneNumberId, accessToken, messageId } = args
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: messageId,
+      typing_indicator: { type: 'text' },
+    }),
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta typing indicator error: ${response.status}`)
+  }
+}
+
 /**
  * Send a free-form WhatsApp text message.
  * Only works inside the 24-hour customer service window.

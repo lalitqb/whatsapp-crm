@@ -43,6 +43,8 @@ export interface AutomationContext {
   agent_id?: string
   /** Quick-reply / template button id from WhatsApp interactive payload. */
   button_id?: string
+  /** Inbound customer message id (wamid...), used for read/typing indicators. */
+  inbound_message_id?: string
 }
 
 export interface DispatchInput {
@@ -461,6 +463,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         conversationId,
         contactId: args.contactId,
         text,
+        inboundMessageId: args.context.inbound_message_id,
       })
       return `sent via Meta (${whatsapp_message_id})`
     }
@@ -481,6 +484,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         templateName: cfg.template_name,
         language: cfg.language,
         variables: cfg.variables,
+        inboundMessageId: args.context.inbound_message_id,
       })
       return `template sent via Meta (${whatsapp_message_id})`
     }
