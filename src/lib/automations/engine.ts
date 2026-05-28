@@ -28,6 +28,14 @@ import type {
 import { supabaseAdmin } from './admin-client'
 import { getNestedVar, interpolate as interpolateTemplate } from './interpolate'
 import { engineSendText, engineSendTemplate } from './meta-send'
+import { getActiveAutomationsCached, getAllAutomationSteps, filterAutomationSteps } from '@/lib/automations/automation-cache'
+import { saveFlowSession } from '@/lib/automations/flow-session-store'
+import {
+  getWhatsAppConfigCached,
+  prefetchAutomationRuntime,
+  type AutomationRuntime,
+} from '@/lib/automations/runtime-cache'
+import { isRedisEnabled } from '@/lib/redis/client'
 
 // ------------------------------------------------------------
 // Public API
@@ -68,18 +76,8 @@ export interface DispatchInput {
  */
 export async function runAutomationsForTrigger(input: DispatchInput): Promise<void> {
   try {
-    const db = supabaseAdmin()
-    const { data: automations, error } = await db
-      .from('automations')
-      .select('*')
-      .eq('user_id', input.userId)
-      .eq('trigger_type', input.triggerType)
-      .eq('is_active', true)
+    const automations = await getActiveAutomationsCached(input.userId, input.triggerType)
 
-    if (error) {
-      console.error('[automations] fetch failed:', error)
-      return
-    }
     if (!automations || automations.length === 0) {
       if (isWebhookVerbose()) {
         logWebhook('[automations] no active automations for trigger', {
@@ -200,6 +198,12 @@ export async function resumePendingExecution(pending: {
     return
   }
 
+  const [whatsappConfig, allSteps] = await Promise.all([
+    getWhatsAppConfigCached(pending.user_id),
+    getAllAutomationSteps(pending.automation_id),
+  ])
+  const runtime: AutomationRuntime = { whatsappConfig, allSteps, typingShown: false }
+
   try {
     await executeStepsFrom({
       automation: automation as Automation,
@@ -210,6 +214,7 @@ export async function resumePendingExecution(pending: {
       startPosition: pending.next_step_position,
       logId: pending.log_id,
       triggerEvent: 'resumed_wait',
+      runtime,
     })
     await markPending(pending.id, 'done')
   } catch (err) {
@@ -249,6 +254,24 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
 
   const context = primeContactVars(input.context ?? {}, contact)
 
+  let whatsappConfig
+  let allSteps
+  if (isRedisEnabled()) {
+    const prefetched = await prefetchAutomationRuntime(automation.user_id, automation.id)
+    whatsappConfig =
+      prefetched.whatsappConfig ?? (await getWhatsAppConfigCached(automation.user_id))
+    allSteps =
+      prefetched.allSteps.length > 0
+        ? prefetched.allSteps
+        : await getAllAutomationSteps(automation.id)
+  } else {
+    ;[whatsappConfig, allSteps] = await Promise.all([
+      getWhatsAppConfigCached(automation.user_id),
+      getAllAutomationSteps(automation.id),
+    ])
+  }
+  const runtime: AutomationRuntime = { whatsappConfig, allSteps, typingShown: false }
+
   const completed = await executeStepsFrom({
     automation,
     contactId: input.contactId ?? null,
@@ -259,6 +282,7 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
     logId: log.id,
     triggerEvent: input.triggerType,
     contact,
+    runtime,
   })
 
   if (!completed) return
@@ -285,6 +309,7 @@ interface ExecuteArgs {
   logId: string | null
   triggerEvent: string
   contact?: { name?: string | null; phone?: string | null; email?: string | null }
+  runtime?: AutomationRuntime
 }
 
 /** Resume or continue a multi-turn flow from a saved position. Returns true when finished. */
@@ -297,12 +322,21 @@ export async function executeAutomationFromPosition(params: {
   startPosition: number
   logId: string | null
   contact?: { name?: string | null; phone?: string | null; email?: string | null }
+  runtime?: AutomationRuntime
 }): Promise<boolean> {
   const contact =
     params.contact ??
     (await loadContactForAutomation(params.automation.user_id, params.contactId))
 
   const context = primeContactVars(params.context, contact)
+
+  const runtime =
+    params.runtime ??
+    ({
+      whatsappConfig: await getWhatsAppConfigCached(params.automation.user_id),
+      allSteps: await getAllAutomationSteps(params.automation.id),
+      typingShown: false,
+    } satisfies AutomationRuntime)
 
   return executeStepsFrom({
     automation: params.automation,
@@ -314,6 +348,7 @@ export async function executeAutomationFromPosition(params: {
     logId: params.logId,
     triggerEvent: 'flow_resume',
     contact,
+    runtime,
   })
 }
 
@@ -321,19 +356,35 @@ export async function executeAutomationFromPosition(params: {
 async function executeStepsFrom(args: ExecuteArgs): Promise<boolean> {
   const db = supabaseAdmin()
 
-  const baseQuery = db
-    .from('automation_steps')
-    .select('*')
-    .eq('automation_id', args.automation.id)
-    .gte('position', args.startPosition)
-    .order('position', { ascending: true })
+  let steps: AutomationStep[] | null = null
+  let stepsErr: { message: string } | null = null
 
-  const scoped =
-    args.parentStepId === null
-      ? baseQuery.is('parent_step_id', null)
-      : baseQuery.eq('parent_step_id', args.parentStepId).eq('branch', args.branch ?? 'yes')
+  if (args.runtime?.allSteps?.length) {
+    steps = filterAutomationSteps(
+      args.runtime.allSteps,
+      args.parentStepId,
+      args.branch,
+      args.startPosition,
+    )
+  } else {
+    const baseQuery = db
+      .from('automation_steps')
+      .select('*')
+      .eq('automation_id', args.automation.id)
+      .gte('position', args.startPosition)
+      .order('position', { ascending: true })
 
-  const { data: steps, error: stepsErr } = await scoped
+    const scoped =
+      args.parentStepId === null
+        ? baseQuery.is('parent_step_id', null)
+        : baseQuery
+            .eq('parent_step_id', args.parentStepId)
+            .eq('branch', args.branch ?? 'yes')
+
+    const res = await scoped
+    steps = (res.data ?? []) as AutomationStep[]
+    stepsErr = res.error
+  }
 
   if (stepsErr) {
     await finalizeLog(args.logId, 'failed', stepsErr.message)
@@ -390,31 +441,18 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<boolean> {
         const conversationId =
           args.context.conversation_id ?? (await resolveConversationId(args))
         const vars = { ...(args.context.vars ?? {}) }
-        const { error: sessErr } = await db.from('automation_flow_sessions').upsert(
-          {
-            user_id: args.automation.user_id,
-            contact_id: args.contactId,
-            automation_id: args.automation.id,
-            conversation_id: conversationId,
-            log_id: args.logId,
-            next_parent_step_id: args.parentStepId,
-            next_branch: args.branch,
-            next_position: step.position + 1,
-            pending_reply_var: cfg.save_reply_to?.trim() || null,
-            vars,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'user_id,contact_id,automation_id' },
-        )
-        if (
-          sessErr?.code === '42P01' ||
-          sessErr?.message?.includes('automation_flow_sessions')
-        ) {
-          throw new Error(
-            'Multi-turn automations need the automation_flow_sessions table. In Supabase → SQL Editor, run supabase/migrations/015_automation_flow_sessions.sql',
-          )
-        }
-        if (sessErr) throw new Error(sessErr.message)
+        await saveFlowSession({
+          userId: args.automation.user_id,
+          contact_id: args.contactId,
+          automation_id: args.automation.id,
+          conversation_id: conversationId,
+          log_id: args.logId,
+          next_parent_step_id: args.parentStepId,
+          next_branch: args.branch,
+          next_position: step.position + 1,
+          pending_reply_var: cfg.save_reply_to?.trim() || null,
+          vars,
+        })
         results.push({
           step_id: step.id,
           step_type: step.step_type,
@@ -511,12 +549,15 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       const text = interpolate(cfg.text, args)
       if (!text.trim()) throw new Error('send_message has empty text')
       const conversationId = await resolveConversationId(args)
+      const showTyping = !args.runtime?.typingShown
+      if (args.runtime && showTyping) args.runtime.typingShown = true
       const { whatsapp_message_id } = await engineSendText({
         userId: args.automation.user_id,
         conversationId,
         contactId: args.contactId,
         text,
-        inboundMessageId: args.context.inbound_message_id,
+        inboundMessageId: showTyping ? args.context.inbound_message_id : undefined,
+        whatsappConfig: args.runtime?.whatsappConfig ?? undefined,
       })
       return `sent via Meta (${whatsapp_message_id})`
     }
@@ -530,6 +571,8 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       // we MUST emit params in strict numeric order. Lexicographic sort
       // of "1", "2", …, "10" yields "1", "10", "2", … which silently
       // scrambles every template with ≥10 variables.
+      const showTyping = !args.runtime?.typingShown
+      if (args.runtime && showTyping) args.runtime.typingShown = true
       const { whatsapp_message_id } = await engineSendTemplate({
         userId: args.automation.user_id,
         conversationId,
@@ -537,7 +580,8 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         templateName: cfg.template_name,
         language: cfg.language,
         variables: cfg.variables,
-        inboundMessageId: args.context.inbound_message_id,
+        inboundMessageId: showTyping ? args.context.inbound_message_id : undefined,
+        whatsappConfig: args.runtime?.whatsappConfig ?? undefined,
       })
       return `template sent via Meta (${whatsapp_message_id})`
     }

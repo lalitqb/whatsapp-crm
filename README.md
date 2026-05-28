@@ -66,6 +66,29 @@ npm run dev
 Open <http://localhost:3000>. You'll be redirected to `/login` (or
 `/dashboard` if already signed in).
 
+### Faster automations (optional Upstash Redis)
+
+Multi-turn flows (pickup booking, `wait_for_reply`) are much snappier when
+hot paths are cached in [Upstash Redis](https://upstash.com/). Add to
+`.env.local`:
+
+```bash
+UPSTASH_REDIS_REST_URL=https://...
+UPSTASH_REDIS_REST_TOKEN=...
+# Optional — biggest perceived speed win (skips artificial pause before replies)
+AUTOMATION_FAST_MODE=true
+# Or set typing pause in ms (default 100 with Redis, 1200 without)
+AUTOMATION_TYPING_DELAY_MS=0
+```
+
+Verify Redis: open `http://localhost:3000/api/health/redis` after restart.
+
+Without Redis, automations still work — they fall back to Supabase only.
+
+**Note:** Redis avoids repeated Supabase reads on multi-step flows. It does not
+speed up Meta’s send API. Perceived delay is usually typing pause + WhatsApp
+network time, not the database.
+
 ## Documentation
 
 Full self-host documentation — Supabase migrations, WhatsApp Business

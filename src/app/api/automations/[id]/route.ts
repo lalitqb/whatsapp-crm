@@ -6,6 +6,7 @@ import {
   replaceSteps,
   type BuilderStepInput,
 } from '@/lib/automations/steps-tree'
+import { invalidateAutomationCache } from '@/lib/automations/automation-cache'
 import {
   validateStepsForActivation,
   validateTriggerForActivation,
@@ -117,6 +118,8 @@ export async function PATCH(
     if (err) return NextResponse.json({ error: err }, { status: 500 })
   }
 
+  await invalidateAutomationCache(user.id, id)
+
   return NextResponse.json({ ok: true })
 }
 
@@ -134,5 +137,6 @@ export async function DELETE(
     .eq('id', id)
     .eq('user_id', user.id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  await invalidateAutomationCache(user.id, id)
   return NextResponse.json({ ok: true })
 }

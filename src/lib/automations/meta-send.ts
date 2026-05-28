@@ -17,8 +17,8 @@ import {
   buildTemplateSendPlanFromSources,
 } from '@/lib/whatsapp/template-send-plan'
 import { supabaseAdmin } from './admin-client'
-
-const AUTOMATION_TYPING_DELAY_MS = 1200
+import type { CachedWhatsAppConfig } from '@/lib/automations/runtime-cache'
+import { automationTypingDelayMs } from '@/lib/automations/runtime-cache'
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -41,6 +41,7 @@ interface SendTextArgs {
   contactId: string
   text: string
   inboundMessageId?: string
+  whatsappConfig?: CachedWhatsAppConfig
 }
 
 interface SendTemplateArgs {
@@ -54,6 +55,7 @@ interface SendTemplateArgs {
   /** Named or positional keys from automation step_config.variables. */
   variables?: Record<string, string | number>
   inboundMessageId?: string
+  whatsappConfig?: CachedWhatsAppConfig
 }
 
 export async function engineSendText(args: SendTextArgs): Promise<{ whatsapp_message_id: string }> {
@@ -96,16 +98,27 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
     throw new Error(`contact phone invalid: ${contact.phone}`)
   }
 
-  const { data: config, error: configErr } = await db
-    .from('whatsapp_config')
-    .select('*')
-    .eq('user_id', input.userId)
-    .single()
-  if (configErr || !config) {
+  const config =
+    input.whatsappConfig ??
+    (await (async () => {
+      const { data: row, error: configErr } = await db
+        .from('whatsapp_config')
+        .select('*')
+        .eq('user_id', input.userId)
+        .single()
+      if (configErr || !row) return null
+      return {
+        phone_number_id: row.phone_number_id as string,
+        access_token: decrypt(row.access_token as string),
+        waba_id: (row.waba_id as string | null) ?? null,
+      } satisfies CachedWhatsAppConfig
+    })())
+
+  if (!config) {
     throw new Error('WhatsApp not configured for this account')
   }
 
-  const accessToken = decrypt(config.access_token)
+  const accessToken = config.access_token
 
   if (input.inboundMessageId) {
     try {
@@ -114,9 +127,8 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
         accessToken,
         messageId: input.inboundMessageId,
       })
-      // Meta can accept the typing signal and still render nothing if we
-      // reply instantly. Small pause makes "typing…" visible to users.
-      await wait(AUTOMATION_TYPING_DELAY_MS)
+      const typingMs = automationTypingDelayMs()
+      if (typingMs > 0) await wait(typingMs)
     } catch (err) {
       // Typing indicator is best-effort; never block the actual automation reply.
       console.warn('[automations] typing indicator failed:', err)
