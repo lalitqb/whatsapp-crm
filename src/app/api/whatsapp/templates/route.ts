@@ -37,6 +37,7 @@ export async function POST(request: Request) {
       header_type,
       header_content,
       footer_text,
+      cta_button,
     } = body as {
       name?: string
       category?: CrmTemplateCategory
@@ -45,6 +46,11 @@ export async function POST(request: Request) {
       header_type?: string | null
       header_content?: string | null
       footer_text?: string | null
+      cta_button?: {
+        type?: 'url' | 'phone'
+        text?: string
+        value?: string
+      } | null
     }
 
     if (!name?.trim()) {
@@ -72,6 +78,16 @@ export async function POST(request: Request) {
     }
 
     const lang = language?.trim() || 'en_US'
+    const normalizedCta =
+      cta_button?.type &&
+      cta_button.text?.trim() &&
+      cta_button.value?.trim()
+        ? {
+            type: cta_button.type,
+            text: cta_button.text.trim(),
+            value: cta_button.value.trim(),
+          }
+        : null
 
     if (
       header_type &&
@@ -119,6 +135,10 @@ export async function POST(request: Request) {
       footer_text,
       header_type: header_type || null,
       header_content,
+      cta_button:
+        normalizedCta && (normalizedCta.type === 'url' || normalizedCta.type === 'phone')
+          ? normalizedCta
+          : null,
     })
 
     let metaTemplate

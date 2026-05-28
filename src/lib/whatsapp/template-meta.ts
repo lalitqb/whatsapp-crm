@@ -78,6 +78,11 @@ export function buildCreateTemplateComponents(input: {
   footer_text?: string | null
   header_type?: string | null
   header_content?: string | null
+  cta_button?: {
+    type: 'url' | 'phone'
+    text: string
+    value: string
+  } | null
 }): Array<Record<string, unknown>> {
   const components: Array<Record<string, unknown>> = []
 
@@ -98,6 +103,25 @@ export function buildCreateTemplateComponents(input: {
     components.push({
       type: 'FOOTER',
       text: input.footer_text.trim(),
+    })
+  }
+
+  if (input.cta_button?.text?.trim() && input.cta_button?.value?.trim()) {
+    const button =
+      input.cta_button.type === 'phone'
+        ? {
+            type: 'PHONE_NUMBER',
+            text: input.cta_button.text.trim(),
+            phone_number: input.cta_button.value.trim(),
+          }
+        : {
+            type: 'URL',
+            text: input.cta_button.text.trim(),
+            url: input.cta_button.value.trim(),
+          }
+    components.push({
+      type: 'BUTTONS',
+      buttons: [button],
     })
   }
 

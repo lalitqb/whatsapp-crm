@@ -2,17 +2,16 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Settings, MessageSquare, Tag, User, Plug } from 'lucide-react';
+import { Settings, Tag, User, Plug } from 'lucide-react';
 import { IntegrationsApiPanel } from '@/components/settings/integrations-api-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { WhatsAppConfig } from '@/components/settings/whatsapp-config';
-import { TemplateManager } from '@/components/settings/template-manager';
 import { TagManager } from '@/components/settings/tag-manager';
 import { ProfileForm } from '@/components/settings/profile-form';
 import { PasswordForm } from '@/components/settings/password-form';
 import { SessionsCard } from '@/components/settings/sessions-card';
 
-const TAB_VALUES = ['profile', 'whatsapp', 'templates', 'integrations', 'tags'] as const;
+const TAB_VALUES = ['profile', 'whatsapp', 'integrations', 'tags'] as const;
 type TabValue = (typeof TAB_VALUES)[number];
 
 function isTabValue(v: string | null): v is TabValue {
@@ -47,8 +46,8 @@ export default function SettingsPage() {
       <div>
         <h1 className="text-2xl font-bold text-white">Settings</h1>
         <p className="text-sm text-slate-400 mt-1">
-          Manage your profile, WhatsApp® integration, templates, notifications
-          API, and tags.
+          Manage your profile, WhatsApp® integration, notifications API, and
+          tags.
         </p>
       </div>
 
@@ -67,13 +66,6 @@ export default function SettingsPage() {
           >
             <Settings className="size-4" />
             WhatsApp Config
-          </TabsTrigger>
-          <TabsTrigger
-            value="templates"
-            className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
-          >
-            <MessageSquare className="size-4" />
-            Templates
           </TabsTrigger>
           <TabsTrigger
             value="integrations"
@@ -99,10 +91,6 @@ export default function SettingsPage() {
 
         <TabsContent value="whatsapp">
           <WhatsAppConfig />
-        </TabsContent>
-
-        <TabsContent value="templates">
-          <TemplateManager />
         </TabsContent>
 
         <TabsContent value="integrations">

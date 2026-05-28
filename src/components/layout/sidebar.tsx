@@ -40,6 +40,12 @@ const navItems = [
   { href: "/broadcasts", label: "Broadcasts", icon: Radio },
   { href: "/automations", label: "Automations", icon: Zap },
   { href: "/ai-agents", label: "AI Agents", icon: Bot },
+  {
+    href: "/template-manager",
+    label: "Templates",
+    icon: MessageSquare,
+    matchPrefixes: ["/template-manager", "/template"],
+  },
 ];
 
 const bottomNavItems = [
@@ -136,7 +142,9 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
             {navItems.map((item) => {
               const isActive =
                 pathname === item.href ||
-                (item.href !== "/dashboard" && pathname.startsWith(item.href));
+                (item.matchPrefixes
+                  ? item.matchPrefixes.some((p) => pathname.startsWith(p))
+                  : item.href !== "/dashboard" && pathname.startsWith(item.href));
 
               const showUnreadDot =
                 item.href === "/inbox" && totalUnread > 0 && !isActive;

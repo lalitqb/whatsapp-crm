@@ -1,36 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Plus, Trash2, Loader2, RefreshCw, CloudUpload } from 'lucide-react';
+import { Trash2, Loader2, RefreshCw, CloudUpload } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { Card, CardContent } from '@/components/ui/card';
 import type { MessageTemplate } from '@/types';
 import { TemplateHeaderMedia } from '@/components/settings/template-header-media';
-
-const CATEGORIES = ['Marketing', 'Utility', 'Authentication'] as const;
-const HEADER_TYPES = ['text', 'image', 'video', 'document'] as const;
 
 const categoryColors: Record<string, string> = {
   Marketing: 'bg-purple-600/20 text-purple-400 border-purple-600/30',
@@ -45,65 +25,15 @@ const statusColors: Record<string, string> = {
   Rejected: 'bg-red-600/20 text-red-400 border-red-600/30',
 };
 
-interface TemplateFormData {
-  name: string;
-  category: MessageTemplate['category'];
-  language: string;
-  body_text: string;
-  header_type: string;
-  header_content: string;
-  footer_text: string;
-}
-
-// Meta's language codes are exact — "en" and "en_US" are distinct and a
-// template approved under one will be rejected if you send with the other
-// (Graph API error #132001 "Template name does not exist in the
-// translation"). Default to en_US to match the DB default on
-// message_templates.language and the broadcasts sender's fallback.
-const emptyForm: TemplateFormData = {
-  name: '',
-  category: 'Marketing',
-  language: 'en_US',
-  body_text: '',
-  header_type: '',
-  header_content: '',
-  footer_text: '',
-};
-
-// Common Meta template language codes. The field still accepts any
-// string — this just offers autocomplete for the usual suspects. Full
-// list: https://developers.facebook.com/docs/whatsapp/api/messages/message-templates#supported-languages
-const COMMON_LANGUAGE_CODES = [
-  'en_US',
-  'en_GB',
-  'en',
-  'es',
-  'es_ES',
-  'es_MX',
-  'fr',
-  'fr_FR',
-  'de',
-  'it',
-  'pt_BR',
-  'pt_PT',
-  'nl',
-  'pl',
-  'ru',
-  'tr',
-  'lt',
-];
-
 export function TemplateManager() {
+  const router = useRouter();
   const supabase = createClient();
   const { user, loading: authLoading } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
-  const [form, setForm] = useState<TemplateFormData>(emptyForm);
 
   useEffect(() => {
     if (authLoading) return;
@@ -111,6 +41,7 @@ export function TemplateManager() {
       setLoading(false);
       return;
     }
+    handleSyncFromMeta()
     fetchTemplates(user.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, user?.id]);
@@ -132,59 +63,6 @@ export function TemplateManager() {
       toast.error('Failed to load templates');
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function handleSave() {
-    if (!form.name.trim()) {
-      toast.error('Template name is required');
-      return;
-    }
-    if (!form.body_text.trim()) {
-      toast.error('Body text is required');
-      return;
-    }
-
-    try {
-      setSaving(true);
-      if (!user) {
-        toast.error('Not authenticated');
-        return;
-      }
-
-      const res = await fetch('/api/whatsapp/templates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: form.name.trim(),
-          category: form.category,
-          language: form.language.trim() || 'en_US',
-          body_text: form.body_text.trim(),
-          header_type:
-            form.header_type && form.header_type !== 'none'
-              ? form.header_type
-              : null,
-          header_content: form.header_content.trim() || null,
-          footer_text: form.footer_text.trim() || null,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error || `Create failed (HTTP ${res.status})`);
-      }
-
-      toast.success(data.message || 'Template submitted to Meta');
-      setDialogOpen(false);
-      setForm(emptyForm);
-      if (user) await fetchTemplates(user.id);
-    } catch (err) {
-      console.error('Save error:', err);
-      toast.error(
-        err instanceof Error ? err.message : 'Failed to create template',
-      );
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -326,13 +204,10 @@ export function TemplateManager() {
             {syncing ? 'Syncing…' : 'Sync from Meta'}
           </Button>
           <Button
-            onClick={() => {
-              setForm(emptyForm);
-              setDialogOpen(true);
-            }}
+            onClick={() => router.push('/template/new')}
             className="bg-violet-600 hover:bg-violet-700 text-white"
           >
-            <Plus className="size-4" />
+            <CloudUpload className="size-4" />
             New Template
           </Button>
         </div>
@@ -414,160 +289,6 @@ export function TemplateManager() {
         </div>
       )}
 
-      {/* New Template Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="bg-slate-900 border-slate-700 sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="text-white">New Message Template</DialogTitle>
-            <DialogDescription className="text-slate-400">
-              Submits the template to your WhatsApp Business Account on Meta for
-              review. Status is usually Pending until approved.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <Label className="text-slate-300">Template Name</Label>
-              <Input
-                placeholder="e.g. order_confirmation"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500"
-              />
-              <p className="text-[11px] text-slate-500">
-                Saved as lowercase with underscores on Meta (e.g.{' '}
-                <code className="text-slate-400">Welcome Message</code> →{' '}
-                <code className="text-slate-400">welcome_message</code>).
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-slate-300">Category</Label>
-                <Select
-                  value={form.category}
-                  onValueChange={(val) =>
-                    setForm({ ...form, category: val as MessageTemplate['category'] })
-                  }
-                >
-                  <SelectTrigger className="w-full bg-slate-800 border-slate-700 text-white">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-slate-800 border-slate-700">
-                    {CATEGORIES.map((cat) => (
-                      <SelectItem key={cat} value={cat} className="text-white focus:bg-slate-700 focus:text-white">
-                        {cat}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-slate-300">Language</Label>
-                <Input
-                  list="template-language-codes"
-                  placeholder="en_US"
-                  value={form.language}
-                  onChange={(e) => setForm({ ...form, language: e.target.value })}
-                  className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500"
-                />
-                <datalist id="template-language-codes">
-                  {COMMON_LANGUAGE_CODES.map((code) => (
-                    <option key={code} value={code} />
-                  ))}
-                </datalist>
-                <p className="text-[11px] text-slate-500">
-                  Must match the exact language code the template is approved
-                  under on Meta — e.g. <code>en_US</code> and <code>en</code>{' '}
-                  are distinct.
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-slate-300">Header Type</Label>
-              <Select
-                value={form.header_type}
-                onValueChange={(val) => setForm({ ...form, header_type: val || '' })}
-              >
-                <SelectTrigger className="w-full bg-slate-800 border-slate-700 text-white">
-                  <SelectValue placeholder="None" />
-                </SelectTrigger>
-                <SelectContent className="bg-slate-800 border-slate-700">
-                  <SelectItem value="none" className="text-white focus:bg-slate-700 focus:text-white">
-                    None
-                  </SelectItem>
-                  {HEADER_TYPES.map((type) => (
-                    <SelectItem key={type} value={type} className="text-white focus:bg-slate-700 focus:text-white">
-                      {type.charAt(0).toUpperCase() + type.slice(1)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {form.header_type === 'text' && (
-              <div className="space-y-2">
-                <Label className="text-slate-300">Header Text</Label>
-                <Input
-                  placeholder="Optional header line"
-                  value={form.header_content}
-                  onChange={(e) =>
-                    setForm({ ...form, header_content: e.target.value })
-                  }
-                  className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500"
-                />
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <Label className="text-slate-300">Body Text</Label>
-              <Textarea
-                placeholder="Enter your template message body. Use {{1}}, {{2}} for variables."
-                value={form.body_text}
-                onChange={(e) => setForm({ ...form, body_text: e.target.value })}
-                rows={4}
-                className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 resize-none"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-slate-300">Footer Text</Label>
-              <Input
-                placeholder="Optional footer text"
-                value={form.footer_text}
-                onChange={(e) => setForm({ ...form, footer_text: e.target.value })}
-                className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500"
-              />
-            </div>
-          </div>
-
-          <DialogFooter className="bg-slate-900 border-slate-700">
-            <Button
-              variant="outline"
-              onClick={() => setDialogOpen(false)}
-              className="border-slate-700 text-slate-300 hover:bg-slate-800"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSave}
-              disabled={saving}
-              className="bg-violet-600 hover:bg-violet-700 text-white"
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                'Create on Meta'
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
