@@ -18,6 +18,12 @@ import {
 } from '@/lib/whatsapp/template-send-plan'
 import { supabaseAdmin } from './admin-client'
 
+const AUTOMATION_TYPING_DELAY_MS = 1200
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 // ------------------------------------------------------------
 // Automation-side Meta sender.
 //
@@ -108,6 +114,9 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
         accessToken,
         messageId: input.inboundMessageId,
       })
+      // Meta can accept the typing signal and still render nothing if we
+      // reply instantly. Small pause makes "typing…" visible to users.
+      await wait(AUTOMATION_TYPING_DELAY_MS)
     } catch (err) {
       // Typing indicator is best-effort; never block the actual automation reply.
       console.warn('[automations] typing indicator failed:', err)

@@ -1,6 +1,7 @@
 import type { AutomationContext } from './engine'
 import { executeAutomationFromPosition } from './engine'
 import { supabaseAdmin } from './admin-client'
+import { isWebhookVerbose, logWebhook } from '@/lib/whatsapp/webhook-logger'
 
 export interface FlowSessionRow {
   id: string
@@ -25,10 +26,16 @@ export async function getActiveFlowSession(
     .select('*')
     .eq('user_id', userId)
     .eq('contact_id', contactId)
+    .order('updated_at', { ascending: false })
+    .limit(1)
     .maybeSingle()
 
   if (error?.code === '42P01') return null
-  if (error || !data) return null
+  if (error) {
+    console.error('[flow-session] load failed:', error.message)
+    return null
+  }
+  if (!data) return null
 
   return {
     id: data.id as string,
@@ -89,7 +96,15 @@ export async function tryResumeAutomationFlow(args: {
   contact: { name?: string | null; phone?: string | null; email?: string | null }
 }): Promise<boolean> {
   const session = await getActiveFlowSession(args.userId, args.contactId)
-  if (!session) return false
+  if (!session) {
+    if (isWebhookVerbose()) {
+      logWebhook('[flow] no active session to resume', {
+        userId: args.userId,
+        contactId: args.contactId,
+      })
+    }
+    return false
+  }
 
   const vars = { ...session.vars }
   vars.last_reply = args.messageText
@@ -128,7 +143,37 @@ export async function tryResumeAutomationFlow(args: {
 
   if (completed) {
     await clearFlowSession(args.userId, args.contactId, session.automation_id)
+    if (isWebhookVerbose()) {
+      logWebhook('[flow] resume completed', {
+        automationId: session.automation_id,
+        pendingVar: session.pending_reply_var,
+      })
+    }
+    return true
   }
 
-  return true
+  // `executeAutomationFromPosition` returns false when the flow pauses again
+  // (wait / wait_for_reply) OR when a step fails. Only clear the session when
+  // nothing is waiting — otherwise we delete the row the engine just wrote
+  // (e.g. after pickup_date → wait_for_reply pickup_slot) and the next button
+  // click never resumes to the POST booking step.
+  const stillWaiting = await getActiveFlowSession(args.userId, args.contactId)
+  if (stillWaiting) {
+    if (isWebhookVerbose()) {
+      logWebhook('[flow] resume paused, session kept', {
+        automationId: stillWaiting.automation_id,
+        pendingVar: stillWaiting.pending_reply_var,
+        nextPosition: stillWaiting.next_position,
+      })
+    }
+    return true
+  }
+
+  if (isWebhookVerbose()) {
+    logWebhook('[flow] resume failed, session cleared', {
+      automationId: session.automation_id,
+    })
+  }
+  await clearFlowSession(args.userId, args.contactId, session.automation_id)
+  return false
 }

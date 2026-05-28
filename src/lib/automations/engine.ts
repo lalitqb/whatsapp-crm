@@ -616,6 +616,9 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
 
       if (!res.ok) {
         const errMsg = httpErrorMessage(data, text, res.status)
+        if (isBookingCreateUrl(url)) {
+          await notifyBookingFailure(args, errMsg)
+        }
         throw new Error(`http_request ${res.status}: ${errMsg}`)
       }
 
@@ -777,6 +780,32 @@ function interpolateHeaders(
 
 function isCustomerLookupUrl(url: string): boolean {
   return url.includes('bookings/customer')
+}
+
+function isBookingCreateUrl(url: string): boolean {
+  try {
+    const path = new URL(url).pathname
+    return /\/bookings\/?$/i.test(path) && !path.includes('/customer')
+  } catch {
+    return url.includes('/bookings') && !url.includes('/customer')
+  }
+}
+
+async function notifyBookingFailure(args: ExecuteArgs, errMsg: string): Promise<void> {
+  if (!args.contactId) return
+  try {
+    const conversationId =
+      args.context.conversation_id ?? (await resolveConversationId(args))
+    await engineSendText({
+      userId: args.automation.user_id,
+      conversationId,
+      contactId: args.contactId,
+      text: `We couldn't complete your pickup booking: ${errMsg}. Please check the date (YYYY-MM-DD) and time slot, then try again.`,
+      inboundMessageId: args.context.inbound_message_id,
+    })
+  } catch (e) {
+    console.warn('[automations] booking failure notify:', e)
+  }
 }
 
 /** 404 or API "not found" payloads → treat as no existing customer (run condition No branch). */

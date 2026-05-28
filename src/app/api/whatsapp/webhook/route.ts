@@ -56,6 +56,8 @@ interface WhatsAppMessage {
     button_reply?: { id: string; title: string }
     list_reply?: { id: string; title: string; description?: string }
   }
+  /** Legacy quick-reply button payload shape from Meta webhooks. */
+  button?: { text?: string; payload?: string }
   /** Present when the customer swipe-replies to one of our messages. */
   context?: { id: string }
 }
@@ -751,6 +753,7 @@ function extractInteractiveText(message: WhatsAppMessage): string | null {
 }
 
 function extractButtonId(message: WhatsAppMessage): string | undefined {
+  if (message.button?.payload) return message.button.payload
   const interactive = message.interactive
   if (interactive?.type === 'button_reply' && interactive.button_reply?.id) {
     return interactive.button_reply.id
@@ -799,6 +802,14 @@ async function parseMessageContent(
     case 'interactive':
       return {
         contentText: extractInteractiveText(message),
+        mediaUrl: null,
+        mediaType: null,
+      }
+
+    case 'button':
+      return {
+        contentText:
+          message.button?.text || message.button?.payload || extractButtonId(message) || null,
         mediaUrl: null,
         mediaType: null,
       }
