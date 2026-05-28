@@ -33,7 +33,7 @@ export interface AutomationTemplateDefinition {
 const PLACEHOLDER_API_HEADERS = { 'X-Api-Key': 'YOUR_API_KEY' } as const
 
 const EXISTING_BOOKING_BODY = `{
-  "name": "{{vars.customer_name}}",
+  "name": "{{contact.name}}",
   "locality": "{{vars.customer_locality}}",
   "pickupAddress": "{{vars.customer_address}}",
   "date": "{{vars.pickup_date}}",
@@ -42,7 +42,7 @@ const EXISTING_BOOKING_BODY = `{
 }`
 
 const NEW_BOOKING_BODY = `{
-  "name": "{{vars.pickup_name}}",
+  "name": "{{contact.name}}",
   "locality": "{{vars.pickup_address}}",
   "pickupAddress": "{{vars.pickup_address}}",
   "date": "{{vars.pickup_date}}",
@@ -169,7 +169,7 @@ export const AUTOMATION_TEMPLATES: Record<TemplateSlug, AutomationTemplateDefini
       {
         step_type: 'send_message',
         step_config: {
-          text: 'Hi {{vars.customer_name}}! When would you like your pickup? Send the date as *YYYY-MM-DD*.',
+          text: 'Hi {{contact.name}}! When would you like your pickup? Send the date (e.g. *tomorrow* or *2026-05-30*).',
         },
         parent_index: 1,
         branch: 'yes',
@@ -217,21 +217,7 @@ export const AUTOMATION_TEMPLATES: Record<TemplateSlug, AutomationTemplateDefini
       {
         step_type: 'send_message',
         step_config: {
-          text: "Welcome! Let's book your first pickup. What is your *full name*?",
-        },
-        parent_index: 1,
-        branch: 'no',
-      },
-      {
-        step_type: 'wait_for_reply',
-        step_config: { save_reply_to: 'pickup_name' },
-        parent_index: 1,
-        branch: 'no',
-      },
-      {
-        step_type: 'send_message',
-        step_config: {
-          text: 'Please send your full *pickup address* (include area/city).',
+          text: "Hi {{contact.name}}! Let's book your first pickup.\n\nPlease send your full *pickup address* (include area/city).",
         },
         parent_index: 1,
         branch: 'no',
@@ -245,7 +231,7 @@ export const AUTOMATION_TEMPLATES: Record<TemplateSlug, AutomationTemplateDefini
       {
         step_type: 'send_message',
         step_config: {
-          text: 'When would you like pickup? Send the date as *YYYY-MM-DD*.',
+          text: 'When would you like pickup? Send the date (e.g. *tomorrow* or *2026-05-30*).',
         },
         parent_index: 1,
         branch: 'no',

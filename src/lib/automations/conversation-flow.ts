@@ -110,6 +110,36 @@ export async function tryResumeAutomationFlow(args: {
   vars.last_reply = args.messageText
   if (session.pending_reply_var) {
     vars[session.pending_reply_var] = args.messageText
+    const reply = args.messageText.trim()
+    // Keep snake_case + camelCase in sync for booking POST body templates.
+    if (
+      session.pending_reply_var === 'pickup_address' ||
+      session.pending_reply_var === 'address'
+    ) {
+      vars.pickup_address = reply
+      vars.pickupAddress = reply
+      vars.address = reply
+    }
+    if (session.pending_reply_var === 'pickup_date' || session.pending_reply_var === 'date') {
+      vars.pickup_date = reply
+      vars.date = reply
+    }
+    if (
+      session.pending_reply_var === 'pickup_slot' ||
+      session.pending_reply_var === 'timeSlot' ||
+      session.pending_reply_var === 'time_slot'
+    ) {
+      vars.pickup_slot = reply
+      vars.pickupSlot = reply
+      vars.timeSlot = reply
+    }
+    if (session.pending_reply_var === 'pickup_name' && reply.length >= 2) {
+      await supabaseAdmin()
+        .from('contacts')
+        .update({ name: reply, updated_at: new Date().toISOString() })
+        .eq('id', args.contactId)
+      args.contact.name = reply
+    }
   }
 
   const context: AutomationContext = {

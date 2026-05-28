@@ -1,6 +1,9 @@
 import { startPickupBookingFlow } from '@/lib/automations/pickup-booking-flow'
 import { messageMatchesKeywordTrigger } from '@/lib/automations/trigger-config'
 import {
+  checkBookingPayload,
+  enrichBookingPostBody,
+  normalizeBookingPostBody,
   normalizeCustomerPayload,
   parseCustomerLookupResult,
 } from '@/lib/integrations/hexanova-booking'
@@ -52,6 +55,8 @@ export interface DispatchInput {
   triggerType: AutomationTriggerType
   contactId?: string | null
   context?: AutomationContext
+  /** Stored on automation_logs.trigger_event (e.g. inbox_restart). */
+  triggerEvent?: string
 }
 
 /**
@@ -123,6 +128,50 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
   }
 }
 
+/** Run one automation for a contact (skips trigger keyword matching). */
+export async function runAutomationForContact(args: {
+  userId: string
+  automationId: string
+  contactId: string
+  conversationId?: string | null
+  triggerEvent?: string
+  messageText?: string
+}): Promise<{ ok: boolean; error?: string }> {
+  const db = supabaseAdmin()
+  const { data: automation, error } = await db
+    .from('automations')
+    .select('*')
+    .eq('id', args.automationId)
+    .eq('user_id', args.userId)
+    .maybeSingle()
+
+  if (error || !automation) {
+    return { ok: false, error: 'Automation not found' }
+  }
+  if (!automation.is_active) {
+    return { ok: false, error: 'Automation is not active. Enable it in Automations first.' }
+  }
+
+  try {
+    await executeAutomation(automation as Automation, {
+      userId: args.userId,
+      contactId: args.contactId,
+      triggerType: 'keyword_match',
+      triggerEvent: args.triggerEvent ?? 'manual_run',
+      context: {
+        conversation_id: args.conversationId ?? undefined,
+        message_text: args.messageText ?? 'book pickup',
+        vars: {},
+      },
+    })
+    return { ok: true }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[automations] runAutomationForContact failed:', msg)
+    return { ok: false, error: msg }
+  }
+}
+
 /**
  * Resume a run that was parked at a wait step. Called from the cron
  * endpoint after it grabs a due `automation_pending_executions` row.
@@ -182,7 +231,7 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
       automation_id: automation.id,
       user_id: automation.user_id,
       contact_id: input.contactId ?? null,
-      trigger_event: input.triggerType,
+      trigger_event: input.triggerEvent ?? input.triggerType,
       steps_executed: [],
       status: 'success',
     })
@@ -198,10 +247,12 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
     ? await loadContactForAutomation(automation.user_id, input.contactId)
     : undefined
 
+  const context = primeContactVars(input.context ?? {}, contact)
+
   const completed = await executeStepsFrom({
     automation,
     contactId: input.contactId ?? null,
-    context: input.context ?? {},
+    context,
     parentStepId: null,
     branch: null,
     startPosition: 0,
@@ -251,10 +302,12 @@ export async function executeAutomationFromPosition(params: {
     params.contact ??
     (await loadContactForAutomation(params.automation.user_id, params.contactId))
 
+  const context = primeContactVars(params.context, contact)
+
   return executeStepsFrom({
     automation: params.automation,
     contactId: params.contactId,
-    context: params.context,
+    context,
     parentStepId: params.parentStepId,
     branch: params.branch,
     startPosition: params.startPosition,
@@ -540,10 +593,12 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       if (!allowed.has(cfg.field)) {
         return `field ${cfg.field} not writable from automations`
       }
+      const value = tpl(String(cfg.value ?? ''), args)
       await db
         .from('contacts')
-        .update({ [cfg.field]: cfg.value, updated_at: new Date().toISOString() })
+        .update({ [cfg.field]: value, updated_at: new Date().toISOString() })
         .eq('id', args.contactId)
+      if (args.contact && cfg.field === 'name') args.contact.name = value
       return `${cfg.field} updated`
     }
 
@@ -595,6 +650,30 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         if (init.body && !headers['content-type'] && !headers['Content-Type']) {
           headers['content-type'] = 'application/json'
         }
+        if (init.body && isBookingCreateUrl(url)) {
+          const bookingContact =
+            args.contact ??
+            (args.contactId
+              ? await loadContactForAutomation(args.automation.user_id, args.contactId)
+              : undefined)
+          const flowVars = (args.context.vars ?? {}) as Record<string, unknown>
+          init.body = enrichBookingPostBody(String(init.body), flowVars)
+          init.body = normalizeBookingPostBody(String(init.body), bookingContact)
+          const check = checkBookingPayload(String(init.body))
+          if (!check.ok) {
+            const msg = bookingStepHint(check.missing)
+            if (isWebhookVerbose()) {
+              logWebhook('[automations] booking POST blocked (automation vars)', {
+                automationId: args.automation.id,
+                missing: check.missing,
+                payload: check.payload,
+                vars: flowVars,
+              })
+            }
+            await notifyBookingFailure(args, msg, check.missing)
+            throw new Error(`http_request validation: ${msg}`)
+          }
+        }
       }
       const res = await fetch(url, init)
       const text = await res.text()
@@ -609,7 +688,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
 
       // Customer lookup: 404 / not-found means "new customer" — continue to condition No branch.
       if (!res.ok && isCustomerLookupUrl(url) && isCustomerNotFoundResponse(res.status, data)) {
-        applyCustomerLookupMiss(vars, cfg.store_as, data)
+        applyCustomerLookupMiss(vars, cfg.store_as, data, args.contact?.name)
         args.context.vars = vars
         return `customer lookup ${res.status} → vars.customer_found=false`
       }
@@ -617,12 +696,23 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       if (!res.ok) {
         const errMsg = httpErrorMessage(data, text, res.status)
         if (isBookingCreateUrl(url)) {
+          if (isWebhookVerbose()) {
+            logWebhook('[automations] booking POST rejected by API', {
+              automationId: args.automation.id,
+              status: res.status,
+              error: errMsg,
+              requestBody: init.body,
+              response: data,
+            })
+          } else {
+            console.error('[automations] booking POST failed', res.status, errMsg, init.body)
+          }
           await notifyBookingFailure(args, errMsg)
         }
         throw new Error(`http_request ${res.status}: ${errMsg}`)
       }
 
-      applyHttpResponseToVars(url, data, vars, cfg.store_as)
+      applyHttpResponseToVars(url, data, vars, cfg.store_as, args.contact?.name)
       args.context.vars = vars
       return `stored in vars.${cfg.store_as}`
     }
@@ -791,16 +881,40 @@ function isBookingCreateUrl(url: string): boolean {
   }
 }
 
-async function notifyBookingFailure(args: ExecuteArgs, errMsg: string): Promise<void> {
+function bookingStepHint(missing: string[]): string {
+  if (missing.includes('pickupAddress')) {
+    return 'Please send your full pickup *address* (house no, area, city) first.'
+  }
+  if (missing.includes('date')) {
+    return 'Please send your pickup *date* next (e.g. *tomorrow* or *2026-05-30*).'
+  }
+  if (missing.includes('timeSlot')) {
+    return 'Please choose a *time slot* for pickup.'
+  }
+  if (missing.includes('phonePrimary')) {
+    return 'We could not read your phone number from the contact. Please check the contact in CRM.'
+  }
+  return `Missing: ${missing.join(', ')}. Complete each step of the booking flow, then try again.`
+}
+
+async function notifyBookingFailure(
+  args: ExecuteArgs,
+  errMsg: string,
+  missingFields?: string[],
+): Promise<void> {
   if (!args.contactId) return
   try {
     const conversationId =
       args.context.conversation_id ?? (await resolveConversationId(args))
+    const hint =
+      missingFields && missingFields.length > 0
+        ? bookingStepHint(missingFields)
+        : `${errMsg}. Use a date like *tomorrow* or *YYYY-MM-DD*, and a slot like *9-11 AM*.`
     await engineSendText({
       userId: args.automation.user_id,
       conversationId,
       contactId: args.contactId,
-      text: `We couldn't complete your pickup booking: ${errMsg}. Please check the date (YYYY-MM-DD) and time slot, then try again.`,
+      text: `We couldn't complete your pickup booking. ${hint}`,
       inboundMessageId: args.context.inbound_message_id,
     })
   } catch (e) {
@@ -821,15 +935,26 @@ function isCustomerNotFoundResponse(status: number, data: unknown): boolean {
   return msg.includes('not found') || msg.includes('no customer')
 }
 
+function primeContactVars(
+  context: AutomationContext,
+  contact?: { name?: string | null; phone?: string | null; email?: string | null },
+): AutomationContext {
+  if (!contact?.name?.trim()) return context
+  const vars = { ...(context.vars ?? {}) }
+  if (!vars.customer_name) vars.customer_name = contact.name.trim()
+  return { ...context, vars }
+}
+
 function applyCustomerLookupMiss(
   vars: Record<string, unknown>,
   storeAs: string,
   data: unknown,
+  contactName?: string | null,
 ): void {
   vars[storeAs] = data
   vars.customer_found = false
   delete vars.customer
-  delete vars.customer_name
+  vars.customer_name = contactName?.trim() || ''
   delete vars.customer_locality
   delete vars.customer_address
   delete vars.customer_phone
@@ -838,8 +963,20 @@ function applyCustomerLookupMiss(
 function httpErrorMessage(data: unknown, rawText: string, status: number): string {
   if (typeof data === 'object' && data !== null) {
     const row = data as Record<string, unknown>
-    if (row.error != null) return String(row.error)
-    if (row.message != null) return String(row.message)
+    const parts: string[] = []
+    if (row.error != null) parts.push(String(row.error))
+    else if (row.message != null) parts.push(String(row.message))
+    const details = row.details ?? row.errors
+    if (Array.isArray(details)) {
+      parts.push(details.map((d) => String(d)).join('; '))
+    } else if (details && typeof details === 'object') {
+      parts.push(
+        Object.entries(details as Record<string, unknown>)
+          .map(([k, v]) => `${k}: ${String(v)}`)
+          .join('; '),
+      )
+    }
+    if (parts.length > 0) return parts.join(' — ')
   }
   return rawText || `HTTP ${status}`
 }
@@ -848,19 +985,20 @@ function applyCustomerLookupToVars(
   vars: Record<string, unknown>,
   storeAs: string,
   data: unknown,
+  contactName?: string | null,
 ): void {
   vars[storeAs] = data
   const { found, customer } = parseCustomerLookupResult(data)
   vars.customer_found = found
   if (customer) {
     vars.customer = customer
-    vars.customer_name = customer.name ?? ''
+    vars.customer_name = contactName?.trim() || customer.name || ''
     vars.customer_locality = customer.locality ?? ''
     vars.customer_address = customer.pickupAddress ?? ''
     if (customer.phonePrimary) vars.customer_phone = customer.phonePrimary
   } else {
     delete vars.customer
-    delete vars.customer_name
+    vars.customer_name = contactName?.trim() || ''
     delete vars.customer_locality
     delete vars.customer_address
     delete vars.customer_phone
@@ -872,10 +1010,11 @@ function applyHttpResponseToVars(
   data: unknown,
   vars: Record<string, unknown>,
   storeAs: string,
+  contactName?: string | null,
 ): void {
   vars[storeAs] = data
   if (!isCustomerLookupUrl(url)) return
-  applyCustomerLookupToVars(vars, storeAs, data)
+  applyCustomerLookupToVars(vars, storeAs, data, contactName)
 }
 
 async function loadContactForAutomation(

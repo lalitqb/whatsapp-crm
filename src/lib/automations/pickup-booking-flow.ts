@@ -114,6 +114,14 @@ async function saveSession(session: {
 }
 
 async function clearSession(userId: string, contactId: string): Promise<void> {
+  await clearBookingConversationSession(userId, contactId)
+}
+
+/** Clear legacy pickup booking session (separate from automation_flow_sessions). */
+export async function clearBookingConversationSession(
+  userId: string,
+  contactId: string,
+): Promise<void> {
   await supabaseAdmin()
     .from('booking_conversation_sessions')
     .delete()

@@ -18,12 +18,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { format } from "date-fns";
+import { AutomationRestartPanel } from "./automation-restart-panel";
 
 interface ContactSidebarProps {
   contact: Contact | null;
+  conversationId?: string | null;
 }
 
-export function ContactSidebar({ contact }: ContactSidebarProps) {
+export function ContactSidebar({ contact, conversationId }: ContactSidebarProps) {
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
@@ -169,6 +171,16 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
               </div>
             )}
           </div>
+
+          {conversationId && (
+            <>
+              <div className="my-4 border-t border-slate-800" />
+              <AutomationRestartPanel
+                contactId={contact.id}
+                conversationId={conversationId}
+              />
+            </>
+          )}
 
           {/* Divider */}
           <div className="my-4 border-t border-slate-800" />

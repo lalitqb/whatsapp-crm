@@ -20,7 +20,10 @@ import {
   Check,
   Clock,
   ArrowLeft,
+  RotateCcw,
+  Loader2,
 } from "lucide-react";
+import { useRestartAutomation } from "@/hooks/use-restart-automation";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -114,6 +117,8 @@ export function MessageThread({
   onBack,
 }: MessageThreadProps) {
   const { user } = useAuth();
+  const { restart: restartAutomation, loading: restartingAutomation } =
+    useRestartAutomation(contact?.id, conversation?.id);
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
@@ -672,6 +677,21 @@ export function MessageThread({
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            title="Restart booking automation"
+            disabled={restartingAutomation}
+            onClick={() => void restartAutomation()}
+            className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-violet-300 hover:bg-slate-800 disabled:opacity-50"
+          >
+            {restartingAutomation ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" />
+            )}
+            <span className="hidden sm:inline">Restart flow</span>
+          </button>
+
           {/* Status dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger className={cn(
