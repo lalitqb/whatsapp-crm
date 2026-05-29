@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/automations/admin-client'
 import { phonesMatch, preparePhoneForMeta } from '@/lib/whatsapp/phone-utils'
+import type { Contact, Conversation } from '@/types'
 
 /** Canonical E.164-style digits for DB storage (e.g. 917903949014). */
 export function canonicalContactPhone(phone: string): string {
@@ -13,7 +14,7 @@ export function canonicalContactPhone(phone: string): string {
 export async function getCanonicalConversation(
   userId: string,
   contactId: string,
-): Promise<{ id: string; row: Record<string, unknown> } | null> {
+): Promise<{ id: string; row: Conversation } | null> {
   const { data: rows, error } = await supabaseAdmin()
     .from('conversations')
     .select('*')
@@ -29,7 +30,7 @@ export async function getCanonicalConversation(
   }
   if (!rows?.length) return null
 
-  const row = rows[0] as Record<string, unknown>
+  const row = rows[0] as Conversation
   if (rows.length > 1) {
     console.warn('[conversation-store] duplicate conversations for contact — using most recent', {
       userId,
@@ -45,7 +46,7 @@ export async function getCanonicalConversation(
 export async function findOrCreateConversationForContact(
   userId: string,
   contactId: string,
-): Promise<Record<string, unknown> | null> {
+): Promise<Conversation | null> {
   const existing = await getCanonicalConversation(userId, contactId)
   if (existing) return existing.row
 
@@ -68,11 +69,11 @@ export async function findOrCreateConversationForContact(
     return null
   }
 
-  return newConv as Record<string, unknown>
+  return newConv as Conversation
 }
 
 export interface ContactLookupResult {
-  contact: Record<string, unknown>
+  contact: Contact
   wasCreated: boolean
 }
 
@@ -102,12 +103,12 @@ export async function findOrCreateContactByPhone(
 
   const existing = (contacts ?? []).find((c) =>
     phonesMatch(String((c as { phone?: string }).phone ?? ''), canonicalPhone),
-  ) as Record<string, unknown> | undefined
+  ) as Contact | undefined
 
   if (existing?.id) {
-    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
+    const updates: Partial<Contact> = { updated_at: new Date().toISOString() }
     if (name && name !== existing.name) updates.name = name
-    const stored = String(existing.phone ?? '')
+    const stored = existing.phone ?? ''
     if (stored && !phonesMatch(stored, canonicalPhone)) {
       updates.phone = canonicalPhone
       console.warn('[conversation-store] normalized contact phone to canonical form', {
@@ -120,7 +121,7 @@ export async function findOrCreateContactByPhone(
       await supabaseAdmin()
         .from('contacts')
         .update(updates)
-        .eq('id', existing.id as string)
+        .eq('id', existing.id)
     }
     return { contact: { ...existing, ...updates }, wasCreated: false }
   }
@@ -140,7 +141,7 @@ export async function findOrCreateContactByPhone(
     return null
   }
 
-  return { contact: newContact as Record<string, unknown>, wasCreated: true }
+  return { contact: newContact as Contact, wasCreated: true }
 }
 
 /** Resolve conversation id for automations (never throws on duplicate rows). */

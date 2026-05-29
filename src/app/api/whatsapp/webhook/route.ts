@@ -553,7 +553,7 @@ async function processMessage(
 
   const conversation = await findOrCreateConversationForContact(
     userId,
-    contactRecord.id as string,
+    contactRecord.id,
   )
   if (!conversation) return
 
