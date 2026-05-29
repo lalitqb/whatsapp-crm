@@ -61,10 +61,25 @@ export function normalizePhone(phone: string): string {
  * e.g. "370063949836" (with trunk 0) matches "37063949836" (without trunk 0)
  * by comparing the last 8 digits.
  */
+/** Subscriber digits for matching (10 for IN mobile, else full number). */
+function phoneMatchKey(digits: string): string {
+  if (!digits) return ''
+  // Indian numbers: 91 + 10-digit mobile — match on the 10-digit core.
+  if (/^91[6-9]\d{9}$/.test(digits)) return digits.slice(-10)
+  if (/^[6-9]\d{9}$/.test(digits)) return digits
+  if (digits.length >= 10) return digits.slice(-10)
+  return digits
+}
+
 export function phonesMatch(phone1: string, phone2: string): boolean {
   const n1 = normalizePhone(phone1)
   const n2 = normalizePhone(phone2)
   if (n1 === n2) return true
+
+  const k1 = phoneMatchKey(n1)
+  const k2 = phoneMatchKey(n2)
+  if (k1.length >= 10 && k2.length >= 10 && k1 === k2) return true
+
   if (n1.length >= 8 && n2.length >= 8) {
     return n1.slice(-8) === n2.slice(-8)
   }

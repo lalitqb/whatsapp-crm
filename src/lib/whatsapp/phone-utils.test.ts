@@ -64,6 +64,11 @@ describe("phonesMatch", () => {
     expect(phonesMatch("+37063949836", "+37063949837")).toBe(false);
   });
 
+  it("matches Indian 10-digit and 91-prefixed forms", () => {
+    expect(phonesMatch("917903949014", "7903949014")).toBe(true);
+    expect(phonesMatch("917485033880", "7485033880")).toBe(true);
+  });
+
   it("rejects very short inputs that would false-positive on tail match", () => {
     // Only 7 digits — the last-8 fallback is gated to len>=8 on both
     // sides to avoid declaring "12345" and "67890-12345" a match.

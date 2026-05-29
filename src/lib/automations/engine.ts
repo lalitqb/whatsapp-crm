@@ -30,6 +30,7 @@ import { getNestedVar, interpolate as interpolateTemplate } from './interpolate'
 import { engineSendText, engineSendTemplate } from './meta-send'
 import { getActiveAutomationsCached, getAllAutomationSteps, filterAutomationSteps } from '@/lib/automations/automation-cache'
 import { saveFlowSession } from '@/lib/automations/flow-session-store'
+import { resolveConversationIdForContact } from '@/lib/inbox/conversation-store'
 import {
   getWhatsAppConfigCached,
   prefetchAutomationRuntime,
@@ -820,18 +821,12 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
  * no meaningful target without a conversation.
  */
 async function resolveConversationId(args: ExecuteArgs): Promise<string> {
-  const fromCtx = args.context.conversation_id
-  if (fromCtx) return fromCtx
   if (!args.contactId) throw new Error('cannot resolve conversation: no contact')
-  const { data, error } = await supabaseAdmin()
-    .from('conversations')
-    .select('id')
-    .eq('user_id', args.automation.user_id)
-    .eq('contact_id', args.contactId)
-    .maybeSingle()
-  if (error) throw new Error(`conversation lookup failed: ${error.message}`)
-  if (!data?.id) throw new Error('no conversation for contact')
-  return data.id as string
+  return resolveConversationIdForContact(
+    args.automation.user_id,
+    args.contactId,
+    args.context.conversation_id,
+  )
 }
 
 function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {
