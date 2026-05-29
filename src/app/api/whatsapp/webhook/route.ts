@@ -696,6 +696,7 @@ async function processMessage(
     contactId: contactRecord.id,
     conversationId: conversation.id,
     messageText: inboundText,
+    buttonId: extractButtonId(message),
     inboundMessageId: message.id,
     contact: {
       name: contactRecord.name ?? contactName,

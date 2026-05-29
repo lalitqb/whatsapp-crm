@@ -5,6 +5,7 @@ import {
   enrichBookingPostBody,
   normalizeBookingPostBody,
   normalizeBookingTimeSlot,
+  normalizePickupDateReply,
   parseBookingDate,
   parseCustomerLookupResult,
   checkBookingPayload,
@@ -66,6 +67,16 @@ describe('parseBookingDate', () => {
   it('accepts ISO dates', () => {
     expect(parseBookingDate('2026-05-30')).toBe('2026-05-30')
     expect(parseBookingDate('2026-06-45')).toBeNull()
+  })
+})
+
+describe('normalizePickupDateReply', () => {
+  it('maps Today/Tomorrow labels to lowercase API tokens (not ISO)', () => {
+    expect(normalizePickupDateReply('Tomorrow')).toBe('tomorrow')
+    expect(normalizePickupDateReply('Today')).toBe('today')
+    expect(normalizePickupDateReply('Today', 'date_today')).toBe('today')
+    expect(normalizePickupDateReply('tomorrow', 'btn_tomorrow')).toBe('tomorrow')
+    expect(normalizePickupDateReply('2026-05-30')).toBe('2026-05-30')
   })
 })
 
@@ -137,7 +148,7 @@ describe('normalizeBookingPostBody', () => {
           timeSlot: '9-11 AM',
           phonePrimary: '7903949014',
         }),
-        null,
+        undefined,
       ),
     )
     expect(out.date).toBe('2026-05-30')

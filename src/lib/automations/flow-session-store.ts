@@ -36,15 +36,10 @@ function rowFromDb(data: Record<string, unknown>): FlowSessionRow {
   }
 }
 
-export async function getActiveFlowSession(
+async function loadFlowSessionFromDb(
   userId: string,
   contactId: string,
 ): Promise<FlowSessionRow | null> {
-  if (isRedisEnabled()) {
-    const cached = await getFlowSessionFromRedis(userId, contactId)
-    if (cached) return cached
-  }
-
   const { data, error } = await supabaseAdmin()
     .from('automation_flow_sessions')
     .select('*')
@@ -64,6 +59,30 @@ export async function getActiveFlowSession(
   const row = rowFromDb(data as Record<string, unknown>)
   await setFlowSessionInRedis(userId, contactId, row)
   return row
+}
+
+export async function getActiveFlowSession(
+  userId: string,
+  contactId: string,
+  options?: { retryIfMissing?: boolean },
+): Promise<FlowSessionRow | null> {
+  const delays = options?.retryIfMissing ? [0, 120, 300] : [0]
+
+  for (const delayMs of delays) {
+    if (delayMs > 0) {
+      await new Promise((r) => setTimeout(r, delayMs))
+    }
+
+    if (isRedisEnabled()) {
+      const cached = await getFlowSessionFromRedis(userId, contactId)
+      if (cached) return cached
+    }
+
+    const row = await loadFlowSessionFromDb(userId, contactId)
+    if (row) return row
+  }
+
+  return null
 }
 
 export async function saveFlowSession(
@@ -96,23 +115,18 @@ export async function saveFlowSession(
     pending_reply_var: row.pending_reply_var,
     vars: row.vars,
   }
-  await setFlowSessionInRedis(row.userId, row.contact_id, redisRow)
-
-  // Redis is the hot path for the next inbound message; persist to Postgres without
-  // blocking the automation reply (saves ~100–300ms on wait_for_reply steps).
-  void supabaseAdmin()
+  const { error } = await supabaseAdmin()
     .from('automation_flow_sessions')
     .upsert(payload, { onConflict: 'user_id,contact_id,automation_id' })
-    .then(({ error }) => {
-      if (!error) return
-      if (error.code === '42P01' || error.message?.includes('automation_flow_sessions')) {
-        console.error(
-          '[flow-session] save failed: run supabase/migrations/015_automation_flow_sessions.sql',
-        )
-        return
-      }
-      console.error('[flow-session] async save failed:', error.message)
-    })
+
+  if (error?.code === '42P01' || error?.message?.includes('automation_flow_sessions')) {
+    throw new Error(
+      'Multi-turn automations need the automation_flow_sessions table. In Supabase → SQL Editor, run supabase/migrations/015_automation_flow_sessions.sql',
+    )
+  }
+  if (error) throw new Error(error.message)
+
+  await setFlowSessionInRedis(row.userId, row.contact_id, redisRow)
 }
 
 export async function clearFlowSession(

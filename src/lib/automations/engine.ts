@@ -391,6 +391,19 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<boolean> {
     return false
   }
   if (!steps || steps.length === 0) {
+    const isFlowResume =
+      args.triggerEvent === 'flow_resume' ||
+      (args.startPosition > 0 && args.contactId != null)
+    if (isFlowResume) {
+      console.error('[automations] resume found no steps — keeping session', {
+        automationId: args.automation.id,
+        contactId: args.contactId,
+        parentStepId: args.parentStepId,
+        branch: args.branch,
+        startPosition: args.startPosition,
+      })
+      return false
+    }
     if (args.parentStepId === null && args.logId) {
       await finalizeLog(args.logId, 'success', null)
     }

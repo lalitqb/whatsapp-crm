@@ -38,6 +38,20 @@ export function normalizePhonePrimary(phone: string): string {
 
 const DATE_ISO_RE = /^\d{4}-\d{2}-\d{2}$/
 
+/**
+ * Canonical date strings for Hexanova (API accepts today/Today, tomorrow/Tomorrow).
+ * Only normalizes WhatsApp button labels/payloads to lowercase — does not rewrite to ISO.
+ */
+export function normalizePickupDateReply(reply: string, buttonId?: string): string {
+  const title = reply.trim()
+  const id = (buttonId ?? '').trim().toLowerCase()
+  const lower = title.toLowerCase()
+
+  if (id.includes('tomorrow') || lower === 'tomorrow') return 'tomorrow'
+  if (id.includes('today') || lower === 'today') return 'today'
+  return title
+}
+
 /** Parse customer date input to YYYY-MM-DD when possible. */
 export function parseBookingDate(text: string): string | null {
   const t = text.trim()
