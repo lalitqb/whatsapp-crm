@@ -57,7 +57,6 @@ export function normalizeMetaLanguageCode(code?: string | null): string {
   const parts = code.trim().replace(/-/g, '_').split('_')
   const lang = parts[0]?.toLowerCase() ?? 'en'
   if (parts.length === 1) {
-    if (lang === 'en') return 'en_US'
     if (lang === 'hi') return 'hi_IN'
     return lang
   }

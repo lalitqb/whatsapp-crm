@@ -11,6 +11,14 @@ describe('normalizeMetaLanguageCode', () => {
     expect(normalizeMetaLanguageCode('en_us')).toBe('en_US')
     expect(normalizeMetaLanguageCode('en-US')).toBe('en_US')
   })
+  it('keeps bare en as en (does not promote to en_US)', () => {
+    expect(normalizeMetaLanguageCode('en')).toBe('en')
+  })
+  it('returns en_US for null/empty input', () => {
+    expect(normalizeMetaLanguageCode(null)).toBe('en_US')
+    expect(normalizeMetaLanguageCode('')).toBe('en_US')
+    expect(normalizeMetaLanguageCode(undefined)).toBe('en_US')
+  })
 })
 
 describe('buildTemplateSendPlan', () => {
