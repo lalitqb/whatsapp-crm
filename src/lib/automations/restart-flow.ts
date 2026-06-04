@@ -3,10 +3,6 @@ import { clearFlowSession } from '@/lib/automations/conversation-flow'
 import { runAutomationForContact } from '@/lib/automations/engine'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
 
-/** Default pickup automation (override with PICKUP_AUTOMATION_ID env). */
-export const DEFAULT_PICKUP_AUTOMATION_ID =
-  process.env.PICKUP_AUTOMATION_ID ?? '7a939c2b-8289-411d-8f46-b70069edb209'
-
 export async function resetContactAutomationState(args: {
   userId: string
   contactId: string
@@ -28,10 +24,7 @@ export async function resetContactAutomationState(args: {
   await pending
 }
 
-export async function resolvePickupAutomationId(userId: string): Promise<string> {
-  const configured = process.env.PICKUP_AUTOMATION_ID?.trim()
-  if (configured) return configured
-
+export async function resolvePickupAutomationId(userId: string): Promise<string | null> {
   const { data } = await supabaseAdmin()
     .from('automations')
     .select('id, name')
@@ -39,7 +32,7 @@ export async function resolvePickupAutomationId(userId: string): Promise<string>
     .eq('is_active', true)
     .order('updated_at', { ascending: false })
 
-  if (!data?.length) return DEFAULT_PICKUP_AUTOMATION_ID
+  if (!data?.length) return null
 
   const pickup = data.find((a) => /pickup|booking/i.test(String(a.name)))
   return pickup?.id ?? data[0].id
@@ -53,6 +46,14 @@ export async function restartPickupAutomationForContact(args: {
 }): Promise<{ ok: boolean; error?: string; automationId: string }> {
   const automationId =
     args.automationId?.trim() || (await resolvePickupAutomationId(args.userId))
+
+  if (!automationId) {
+    return {
+      ok: false,
+      error: 'No active pickup/booking automation found. Please activate one in Automations first.',
+      automationId: '',
+    }
+  }
 
   await resetContactAutomationState({
     userId: args.userId,

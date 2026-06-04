@@ -3,12 +3,13 @@
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 
-const DEFAULT_PICKUP_AUTOMATION_ID = "7a939c2b-8289-411d-8f46-b70069edb209";
-
 export function useRestartAutomation(
   contactId: string | null | undefined,
   conversationId: string | null | undefined,
-  automationId: string = DEFAULT_PICKUP_AUTOMATION_ID,
+  // Pass an explicit automation ID only when you know the exact automation to
+  // restart. When omitted the server resolves the best pickup/booking automation
+  // for the current user automatically — this avoids cross-user ID mismatches.
+  automationId?: string,
 ) {
   const [loading, setLoading] = useState(false);
 
@@ -19,15 +20,19 @@ export function useRestartAutomation(
     }
     setLoading(true);
     try {
+      const body: Record<string, string> = {
+        contact_id: contactId,
+        conversation_id: conversationId,
+      };
+      // Only include automation_id when the caller explicitly provides one.
+      // Omitting it lets the server pick the right automation for the logged-in user.
+      if (automationId) body.automation_id = automationId;
+
       const res = await fetch("/api/inbox/restart-automation", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contact_id: contactId,
-          conversation_id: conversationId,
-          automation_id: automationId,
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
