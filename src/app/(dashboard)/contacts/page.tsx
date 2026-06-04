@@ -20,6 +20,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+  DropdownMenuGroup
 } from '@/components/ui/dropdown-menu';
 import {
   Dialog,
@@ -40,6 +43,8 @@ import {
   Users,
   ChevronLeft,
   ChevronRight,
+  Tag as TagIcon,
+  X,
 } from 'lucide-react';
 import { ContactForm } from '@/components/contacts/contact-form';
 import { ContactDetailView } from '@/components/contacts/contact-detail-view';
@@ -59,6 +64,7 @@ export default function ContactsPage() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
 
   // Modals
   const [formOpen, setFormOpen] = useState(false);
@@ -89,6 +95,28 @@ export default function ContactsPage() {
     const from = page * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
+    // When tag filters are active, fetch matching contact IDs first then
+    // use them to constrain the main paginated query (keeps count correct).
+    let tagFilteredIds: string[] | null = null;
+    if (selectedTagIds.length > 0) {
+      const { data: tagMatches } = await supabase
+        .from('contact_tags')
+        .select('contact_id')
+        .in('tag_id', selectedTagIds);
+
+      // De-duplicate: a contact matching multiple selected tags appears once.
+      tagFilteredIds = [
+        ...new Set((tagMatches ?? []).map((r) => r.contact_id)),
+      ];
+
+      if (tagFilteredIds.length === 0) {
+        setContacts([]);
+        setTotalCount(0);
+        setLoading(false);
+        return;
+      }
+    }
+
     let query = supabase
       .from('contacts')
       .select('*', { count: 'exact' })
@@ -98,6 +126,10 @@ export default function ContactsPage() {
     if (search.trim()) {
       const term = `%${search.trim()}%`;
       query = query.or(`name.ilike.${term},phone.ilike.${term},email.ilike.${term}`);
+    }
+
+    if (tagFilteredIds !== null) {
+      query = query.in('id', tagFilteredIds);
     }
 
     const { data, count, error } = await query;
@@ -138,7 +170,7 @@ export default function ContactsPage() {
 
     setContacts(enriched);
     setLoading(false);
-  }, [supabase, page, search, tagsMap]);
+  }, [supabase, page, search, selectedTagIds, tagsMap]);
 
   // Load-once-on-mount-ish data fetches. Each setter inside runs
   // inside an async promise completion (Supabase await), not
@@ -234,21 +266,126 @@ export default function ContactsPage() {
         </div>
       </div>
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-slate-500" />
-        <Input
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            // Reset pagination when the query changes — the result
-            // set shrinks/grows, page N may no longer be valid.
-            setPage(0);
-          }}
-          placeholder="Search by name, phone, or email..."
-          className="pl-8 bg-slate-900 border-slate-700 text-white placeholder:text-slate-500"
-        />
+      {/* Search + Tag Filter */}
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="relative max-w-sm flex-1">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-slate-500" />
+          <Input
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(0);
+            }}
+            placeholder="Search by name, phone, or email..."
+            className="pl-8 bg-slate-900 border-slate-700 text-white placeholder:text-slate-500"
+          />
+        </div>
+
+        {/* Tag filter dropdown */}
+        {Object.keys(tagsMap).length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="outline"
+                  className={
+                    selectedTagIds.length > 0
+                      ? 'border-violet-500 text-violet-300 hover:bg-slate-800'
+                      : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                  }
+                />
+              }
+            >
+              <TagIcon className="size-4" />
+              Filter by tag
+              {selectedTagIds.length > 0 && (
+                <span className="ml-1 rounded-full bg-violet-600 px-1.5 py-px text-[10px] font-semibold text-white leading-none">
+                  {selectedTagIds.length}
+                </span>
+              )}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              className="bg-slate-900 border-slate-700 min-w-48"
+            >
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="text-slate-400 text-xs font-medium px-2 py-1.5">
+                  Filter by tag
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator className="bg-slate-700" />
+                {Object.values(tagsMap).map((tag) => (
+                  <DropdownMenuCheckboxItem
+                    key={tag.id}
+                    checked={selectedTagIds.includes(tag.id)}
+                    onCheckedChange={(checked) => {
+                      setSelectedTagIds((prev) =>
+                        checked
+                          ? [...prev, tag.id]
+                          : prev.filter((id) => id !== tag.id),
+                      );
+                      setPage(0);
+                    }}
+                    className="text-slate-300 focus:bg-slate-800 focus:text-white"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span
+                        className="size-2 rounded-full shrink-0"
+                        style={{ backgroundColor: tag.color }}
+                      />
+                      {tag.name}
+                    </span>
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuGroup>
+              {selectedTagIds.length > 0 && (
+                <>
+                  <DropdownMenuSeparator className="bg-slate-700" />
+                  <DropdownMenuItem
+                    onClick={() => { setSelectedTagIds([]); setPage(0); }}
+                    className="text-slate-400 focus:bg-slate-800 focus:text-slate-300 text-xs"
+                  >
+                    Clear filter
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
+
+      {/* Active tag filter pills */}
+      {selectedTagIds.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-slate-500">Filtered by:</span>
+          {selectedTagIds.map((id) => {
+            const tag = tagsMap[id];
+            if (!tag) return null;
+            return (
+              <button
+                key={id}
+                onClick={() => {
+                  setSelectedTagIds((prev) => prev.filter((t) => t !== id));
+                  setPage(0);
+                }}
+                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-opacity hover:opacity-75"
+                style={{
+                  backgroundColor: tag.color + '20',
+                  color: tag.color,
+                }}
+              >
+                {tag.name}
+                <X className="size-2.5" />
+              </button>
+            );
+          })}
+          <button
+            onClick={() => { setSelectedTagIds([]); setPage(0); }}
+            className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2"
+          >
+            Clear all
+          </button>
+        </div>
+      )}
 
       {/* Table */}
       <div className="rounded-lg border border-slate-800 overflow-hidden">
@@ -280,9 +417,11 @@ export default function ContactsPage() {
                   <div className="flex flex-col items-center gap-2">
                     <Users className="size-8 text-slate-600" />
                     <p className="text-sm text-slate-500">
-                      {search ? 'No contacts match your search.' : 'No contacts yet.'}
+                      {search || selectedTagIds.length > 0
+                        ? 'No contacts match your filters.'
+                        : 'No contacts yet.'}
                     </p>
-                    {!search && (
+                    {!search && selectedTagIds.length === 0 && (
                       <Button
                         variant="outline"
                         size="sm"

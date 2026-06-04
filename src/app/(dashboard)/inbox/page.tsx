@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useMessageNotifications } from "@/hooks/use-message-notifications";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactSidebar } from "@/components/inbox/contact-sidebar";
@@ -30,6 +31,8 @@ export default function InboxPage() {
   const [whatsappConnected, setWhatsappConnected] = useState<boolean | null>(
     null
   );
+
+  const { notify } = useMessageNotifications();
 
   // Fire the deep-link auto-select exactly once per URL — subsequent
   // list refreshes (realtime, manual refetch) must not snap the user
@@ -62,6 +65,19 @@ export default function InboxPage() {
     checkConnection();
   }, []);
 
+  // Keep a ref to conversations so the message event handler can look up
+  // contact names without re-subscribing to realtime on every render.
+  const conversationsRef = useRef<Conversation[]>([]);
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+
+  // Keep a ref to the active conversation for the same reason.
+  const activeConversationRef = useRef<Conversation | null>(null);
+  useEffect(() => {
+    activeConversationRef.current = activeConversation;
+  }, [activeConversation]);
+
   // Handle realtime message events
   const handleMessageEvent = useCallback(
     (event: { eventType: string; new: Message; old: Partial<Message> }) => {
@@ -93,13 +109,41 @@ export default function InboxPage() {
                   last_message_text: newMsg.content_text ?? "",
                   last_message_at: newMsg.created_at,
                   unread_count:
-                    activeConversation?.id === newMsg.conversation_id
+                    activeConversationRef.current?.id === newMsg.conversation_id
                       ? 0
                       : c.unread_count + 1,
                 }
               : c
           )
         );
+
+        // Browser notification + sound for inbound customer messages.
+        // Play sound always; suppress it only when the user is actively
+        // reading that exact conversation with the tab in focus.
+        if (newMsg.sender_type === "customer") {
+          const isActiveThread =
+            activeConversationRef.current?.id === newMsg.conversation_id;
+          const isTabFocused =
+            typeof document !== "undefined" && document.hasFocus();
+          const silent = isActiveThread && isTabFocused;
+
+          const conv = conversationsRef.current.find(
+            (c) => c.id === newMsg.conversation_id
+          );
+          const senderName =
+            conv?.contact?.name ??
+            conv?.contact?.phone ??
+            "New message";
+          const messageText =
+            newMsg.content_text ??
+            (newMsg.content_type === "image" ? "📷 Image" :
+             newMsg.content_type === "audio" ? "🎵 Voice message" :
+             newMsg.content_type === "document" ? "📄 Document" :
+             newMsg.content_type === "video" ? "🎥 Video" :
+             "New message");
+
+          notify(senderName, messageText, silent);
+        }
       }
 
       if (event.eventType === "UPDATE") {
@@ -109,7 +153,8 @@ export default function InboxPage() {
         );
       }
     },
-    [activeConversation]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeConversation, notify]
   );
 
   // Handle realtime conversation events

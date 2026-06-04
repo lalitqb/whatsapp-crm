@@ -30,7 +30,9 @@ export async function loadBroadcastTemplateContext(
     accessToken: string
   },
 ): Promise<BroadcastTemplateContext> {
-  const language = normalizeMetaLanguageCode(
+  // Normalize the language hint from the step config (e.g. "en", "en_US",
+  // "en-US" all become valid Meta locale codes).
+  const requestedLanguage = normalizeMetaLanguageCode(
     args.templateLanguage || 'en_US',
   )
 
@@ -42,13 +44,25 @@ export async function loadBroadcastTemplateContext(
     .eq('user_id', args.userId)
     .eq('name', args.templateName)
 
+  // Prefer an exact language match, then fall back to the first available row.
+  // This means a step configured with "en" will correctly find a template
+  // registered as "en", and one configured with "en_US" will find "en_US".
   const local =
     (localRows ?? []).find(
-      (r) => r.language === language || r.language === args.templateLanguage,
+      (r) =>
+        r.language === requestedLanguage ||
+        r.language === args.templateLanguage,
     ) ??
-    (localRows ?? []).find((r) => r.language === language) ??
     (localRows ?? [])[0] ??
     null
+
+  // Use the template's *actual* registered language (from the DB row) for the
+  // Meta API call, not the step config hint. This means both "en" and "en_US"
+  // step configs work correctly as long as the template exists in the DB with
+  // its correct language. Falls back to the requested language if no DB row.
+  const language = local?.language
+    ? normalizeMetaLanguageCode(local.language)
+    : requestedLanguage
 
   let meta: BroadcastTemplateContext['meta'] = null
   if (args.wabaId) {
