@@ -6,6 +6,11 @@ import { cn } from "@/lib/utils";
 import type { Conversation, ConversationStatus } from "@/types";
 import { Search, ChevronDown } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+
+function ellipsis(text: string | null | undefined, max = 42): string {
+  if (!text) return "";
+  return text.length > max ? text.slice(0, max).trimEnd() + "…" : text;
+}
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -252,14 +257,14 @@ function ConversationItem({
       {/* Content */}
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-sm font-medium text-white">
-            {displayName}
+          <span className="shrink text-sm font-medium text-white">
+            {ellipsis(displayName, 24)}
           </span>
           <span className="shrink-0 text-[10px] text-slate-500">{timeAgo}</span>
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-2">
-          <p className="truncate text-xs text-slate-400">
-            {conversation.last_message_text || "No messages yet"}
+          <p className="shrink text-xs text-slate-400">
+            {ellipsis(conversation.last_message_text) || "No messages yet"}
           </p>
           <div className="flex shrink-0 items-center gap-1.5">
             {conversation.unread_count > 0 && (

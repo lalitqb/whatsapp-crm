@@ -5,11 +5,15 @@ import {
   AlertCircle,
   AlertTriangle,
   CheckCheck,
+  ChevronLeft,
+  ChevronRight,
   Eye,
   Loader2,
   RefreshCw,
   Send,
 } from 'lucide-react';
+
+const PAGE_SIZE = 5;
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -77,7 +81,14 @@ function StatusBadge({ status }: { status: string }) {
 
 function formatWhen(iso: string | null) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString();
+  return new Date(iso).toLocaleString(undefined, {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
 }
 
 function errorSummary(log: NotificationLogRow): string | null {
@@ -92,27 +103,41 @@ function errorSummary(log: NotificationLogRow): string | null {
 
 export function NotificationLogsPanel() {
   const [logs, setLogs] = useState<NotificationLogRow[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [migrationRequired, setMigrationRequired] = useState(false);
+  const [page, setPage] = useState(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (targetPage: number) => {
     setLoading(true);
     try {
-      const res = await fetch('/api/v1/notifications/logs?limit=50');
+      const offset = targetPage * PAGE_SIZE;
+      const res = await fetch(
+        `/api/v1/notifications/logs?limit=${PAGE_SIZE}&offset=${offset}`,
+      );
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Failed to load logs');
       setLogs(data.logs ?? []);
+      setTotal(data.total ?? 0);
       setMigrationRequired(Boolean(data.migrationRequired));
     } catch {
       setLogs([]);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
   }, []);
 
+  // Fetch whenever page changes
   useEffect(() => {
-    load();
-  }, [load]);
+    load(page);
+  }, [load, page]);
+
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+
+  const handlePageChange = (next: number) => {
+    setPage(next);
+  };
 
   return (
     <Card className="bg-slate-900 border-slate-700">
@@ -130,7 +155,7 @@ export function NotificationLogsPanel() {
           variant="outline"
           size="sm"
           className="border-slate-600 shrink-0"
-          onClick={() => load()}
+          onClick={() => { setPage(0); if (page === 0) load(0); }}
           disabled={loading}
         >
           <RefreshCw className={`size-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
@@ -164,6 +189,7 @@ export function NotificationLogsPanel() {
             will appear here.
           </p>
         ) : (
+          <>
           <div className="overflow-x-auto rounded-lg border border-slate-800">
             <Table>
               <TableHeader>
@@ -247,6 +273,41 @@ export function NotificationLogsPanel() {
               </TableBody>
             </Table>
           </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between pt-1">
+              <p className="text-xs text-slate-500">
+                {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}
+              </p>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0 text-slate-400 hover:text-white disabled:opacity-30"
+                  disabled={page === 0 || loading}
+                  onClick={() => handlePageChange(page - 1)}
+                >
+                  <ChevronLeft className="size-4" />
+                </Button>
+                <span className="min-w-14 text-center text-xs text-slate-400">
+                  {loading ? <Loader2 className="size-3 animate-spin inline" /> : `${page + 1} / ${totalPages}`}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0 text-slate-400 hover:text-white disabled:opacity-30"
+                  disabled={page >= totalPages - 1 || loading}
+                  onClick={() => handlePageChange(page + 1)}
+                >
+                  <ChevronRight className="size-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+          </>
         )}
       </CardContent>
     </Card>

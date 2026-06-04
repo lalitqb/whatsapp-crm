@@ -58,28 +58,28 @@ export default function SettingsPage() {
             className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
           >
             <User className="size-4" />
-            Profile
+            <span className="hidden sm:inline">Profile</span>
           </TabsTrigger>
           <TabsTrigger
             value="whatsapp"
             className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
           >
             <Settings className="size-4" />
-            WhatsApp Config
+            <span className="hidden sm:inline">WhatsApp Config</span>
           </TabsTrigger>
           <TabsTrigger
             value="integrations"
             className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
           >
             <Plug className="size-4" />
-            Notifications API
+            <span className="hidden sm:inline">Notifications API</span>
           </TabsTrigger>
           <TabsTrigger
             value="tags"
             className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
           >
             <Tag className="size-4" />
-            Tags
+            <span className="hidden sm:inline">Tags</span>
           </TabsTrigger>
         </TabsList>
 

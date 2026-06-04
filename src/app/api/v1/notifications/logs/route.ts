@@ -23,27 +23,30 @@ export async function GET(request: Request) {
     Math.max(parseInt(searchParams.get('limit') ?? '50', 10) || 50, 1),
     100,
   )
+  const offset = Math.max(parseInt(searchParams.get('offset') ?? '0', 10) || 0, 0)
   const status = searchParams.get('status')?.trim()
 
   let query = supabase
     .from('notification_logs')
     .select(
       'id, customer_phone, template_name, template_language, variables, variable_order, status, whatsapp_message_id, api_error, meta_error_code, meta_error_title, meta_error_message, meta_error_details, sent_at, delivered_at, read_at, failed_at, created_at, updated_at',
+      { count: 'exact' },
     )
     .eq('user_id', user.id)
     .order('created_at', { ascending: false })
-    .limit(limit)
+    .range(offset, offset + limit - 1)
 
   if (status) {
     query = query.eq('status', status)
   }
 
-  const { data, error } = await query
+  const { data, error, count } = await query
 
   if (error) {
     if (error.code === '42P01') {
       return NextResponse.json({
         logs: [],
+        total: 0,
         migrationRequired: true,
         message:
           'Run supabase/migrations/011_notification_logs.sql in the Supabase SQL Editor to enable logging.',
@@ -53,5 +56,5 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  return NextResponse.json({ logs: data ?? [] })
+  return NextResponse.json({ logs: data ?? [], total: count ?? 0 })
 }
