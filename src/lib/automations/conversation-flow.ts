@@ -151,6 +151,19 @@ export async function tryResumeAutomationFlow(args: {
     return false
   }
 
+  // Automation was paused/deactivated — clear the dangling session so
+  // the contact's next message is processed fresh (e.g. by another
+  // active automation or the AI agent) instead of continuing a flow
+  // the operator intentionally stopped.
+  if (!automation.is_active) {
+    console.warn('[flow] automation is inactive — clearing session', {
+      automationId: session.automation_id,
+      contactId: args.contactId,
+    })
+    await clearFlowSession(args.userId, args.contactId, session.automation_id)
+    return false
+  }
+
   let whatsappConfig
   let allSteps
   if (isRedisEnabled()) {

@@ -21,6 +21,27 @@ export function buildOpenAiTools(
   )
   const defs: ToolDefinition[] = []
 
+  if (enabled.has('lookup_customer')) {
+    defs.push({
+      type: 'function',
+      function: {
+        name: 'lookup_customer',
+        description:
+          'Look up an existing customer by their phone number. Returns their saved name, address, and locality if found. Call this first before collecting booking details — existing customers may not need to provide their address again.',
+        parameters: {
+          type: 'object',
+          properties: {
+            phone: {
+              type: 'string',
+              description: '10-digit mobile number or E.164 format',
+            },
+          },
+          required: ['phone'],
+        },
+      },
+    })
+  }
+
   if (enabled.has('check_pickup_slots')) {
     defs.push({
       type: 'function',
@@ -176,6 +197,24 @@ export async function executeAgentTool(
   }
 
   try {
+    if (name === 'lookup_customer') {
+      const phone = String(args.phone ?? '').replace(/\D/g, '').slice(-10)
+      const live = await callBookingApi(
+        ctx,
+        `/bookings/customer?phone=${encodeURIComponent(phone)}`,
+        'GET',
+      )
+      if (!live) {
+        return JSON.stringify({ found: false, message: 'No API configured — treat as new customer.' })
+      }
+      // A 404 / "not found" response means new customer
+      const data = live as Record<string, unknown>
+      if (data.status === 404 || (typeof data.error === 'string' && /not found/i.test(data.error))) {
+        return JSON.stringify({ found: false })
+      }
+      return JSON.stringify({ found: true, customer: live })
+    }
+
     if (name === 'check_pickup_slots') {
       const pincode = String(args.pincode ?? '')
       const date = args.date ? String(args.date) : undefined

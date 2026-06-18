@@ -38,6 +38,12 @@ export interface RunInboundAiArgs {
   inboundText: string
   inboundMessageId: string
   contentType: string
+  /** WhatsApp phone number of the customer (E.164 or 10-digit). Injected into
+   *  the system prompt so the LLM can use it directly in create_booking without
+   *  asking the customer for their own phone number. */
+  contactPhone?: string | null
+  /** Customer display name from the CRM contact record. */
+  contactName?: string | null
 }
 
 function supabaseAdmin() {
@@ -52,7 +58,11 @@ function wantsHandoff(text: string, phrases: string[]): boolean {
   return phrases.some((p) => p.trim() && lower.includes(p.trim().toLowerCase()))
 }
 
-function buildSystemPrompt(agent: AiAgentRow): string {
+function buildSystemPrompt(
+  agent: AiAgentRow,
+  contactPhone?: string | null,
+  contactName?: string | null,
+): string {
   const langs = (agent.languages ?? ['en', 'hi']).join(', ')
   const parts = [
     agent.system_prompt,
@@ -62,6 +72,16 @@ function buildSystemPrompt(agent: AiAgentRow): string {
       ? `Business: ${agent.business_name}${agent.business_website ? ` (${agent.business_website})` : ''}`
       : '',
   ]
+
+  // Inject live contact context so the LLM never needs to ask the customer
+  // for their own phone number or name — it already has them.
+  const contactLines: string[] = []
+  if (contactPhone) contactLines.push(`Customer phone (use this in create_booking, do NOT ask the customer for it): ${contactPhone}`)
+  if (contactName) contactLines.push(`Customer name on file: ${contactName}`)
+  if (contactLines.length) {
+    parts.push('', '--- Current customer context ---', ...contactLines)
+  }
+
   if (agent.knowledge_base?.trim()) {
     parts.push('', '--- Knowledge base (use as source of truth) ---', agent.knowledge_base.trim())
   }
@@ -157,6 +177,8 @@ export async function runAgentTestChat(params: {
   agent: AiAgentRow
   message: string
   history?: ChatMessage[]
+  contactPhone?: string | null
+  contactName?: string | null
 }): Promise<{ reply: string; toolCalls: unknown[] }> {
   if (!isOpenAiConfigured()) {
     throw new Error('OPENAI_API_KEY is not configured')
@@ -164,7 +186,7 @@ export async function runAgentTestChat(params: {
 
   const tools = buildOpenAiTools(params.agent.tools_config ?? [])
   const messages: ChatMessage[] = [
-    { role: 'system', content: buildSystemPrompt(params.agent) },
+    { role: 'system', content: buildSystemPrompt(params.agent, params.contactPhone, params.contactName) },
     ...(params.history ?? []),
     { role: 'user', content: params.message },
   ]
@@ -285,6 +307,8 @@ export async function runInboundAiAgent(
       agent,
       message: text,
       history: history.slice(0, -1),
+      contactPhone: args.contactPhone,
+      contactName: args.contactName,
     })
 
     await engineSendText({

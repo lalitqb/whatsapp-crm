@@ -737,6 +737,8 @@ async function processMessage(
       inboundText,
       inboundMessageId: message.id,
       contentType,
+      contactPhone: contactRecord.phone ?? null,
+      contactName: contactRecord.name ?? contactName ?? null,
     }).catch((err) => console.error('[ai-agent] dispatch failed:', err))
   }
 }
